@@ -351,6 +351,14 @@ function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_i
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
 function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
+function isStayOnProperty(t,propertyId=state.propertyId){
+  if(!t||t.room_id===null||t.room_id===undefined)return false;
+  const r=roomBy(t.room_id);
+  return !!r&&Number(r.property_id)===Number(propertyId);
+}
+function tenantStaysOnProperty(tenantId,propertyId=state.propertyId){
+  return state.tenancies.filter(x=>Number(x.tenant_id)===Number(tenantId)&&isStayOnProperty(x,propertyId));
+}
 /*
  * Shared payment-group rules (owner-confirmed 2026-09-08):
  * 1) Same room_id + same check_in date => one payment group (joint booking).
@@ -545,14 +553,14 @@ function tenancyKind(t){
   if((t.check_in&&t.check_in>d)||t.status==='upcoming')return'upcoming';
   return'current';
 }
-/** Best stay to show for a tenant profile row + filter bucket. */
-function tenantProfileRow(tenant){
-  const stays=state.tenancies.filter(x=>Number(x.tenant_id)===Number(tenant.id));
-  if(!stays.length)return {tenant,stay:null,p:null,r:null,kind:'historical'};
+/** Best stay to show for a tenant profile row on the *current property* tab. */
+function tenantProfileRow(tenant,propertyId=state.propertyId){
+  const stays=tenantStaysOnProperty(tenant.id,propertyId);
+  if(!stays.length)return {tenant,stay:null,p:null,r:null,kind:'historical',onProperty:false};
   const ranked=stays.map(t=>({t,kind:tenancyKind(t)}));
-  const pick=ranked.find(x=>x.kind==='current')||ranked.find(x=>x.kind==='upcoming')||ranked.sort((a,b)=>Number(b.t.id)-Number(a.t.id))[0];
+  const pick=ranked.find(x=>x.kind==='current')||ranked.find(x=>x.kind==='upcoming')||ranked.slice().sort((a,b)=>Number(b.t.id)-Number(a.t.id))[0];
   const stay=pick.t, kind=pick.kind, r=stay?roomBy(stay.room_id):null, p=r?propertyBy(r.property_id):null;
-  return {tenant,stay,p,r,kind};
+  return {tenant,stay,p,r,kind,onProperty:true};
 }
 function badge(v){
   const label=String(v??'').replaceAll('_',' ');
@@ -682,14 +690,16 @@ function tenancyTable(rows,showActions=false){
   </tbody></table></div>`;
 }
 function tenantsPage(){
-  const q=(state.tenantSearch||'').trim().toLowerCase(),filter=state.tenantFilter||'current';
-  const rows=state.tenants.map(tenantProfileRow)
+  const filter=state.tenantFilter||'current';
+  const propName=property()?.name||'this property';
+  const rows=state.tenants.map(t=>tenantProfileRow(t))
+    .filter(x=>x.onProperty&&x.stay)
     .filter(x=>filter==='all'||(filter==='past'?x.kind==='historical':x.kind===filter))
     .sort((a,b)=>(a.tenant.name||'').localeCompare(b.tenant.name||''));
-  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small">Current = still staying. Past = already checked out. Search works across all filters.</span></div></div>
-  <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, property, room, stay type or notes…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — McGregor and Carindale tenants stay on their own property tab. Current = still staying. Past = already checked out.</span></div></div>
+  <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, room, stay type or notes on this property…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind==='historical'?'past':kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
+  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind==='historical'?'past':kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||`<tr><td colspan="6" class="muted">No tenants for ${esc(propName)} in this filter.</td></tr>`}</tbody></table></div></section>`;
 }
 function getExtraRoomFee(p){
   const m=String(p?.pricing_note||'').match(/(?:^|\n)EXTRA_ROOM_FEE:([0-9.]+)(?:\n|$)/);

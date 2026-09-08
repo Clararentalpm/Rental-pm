@@ -1,5 +1,9 @@
 # Changelog
 
+## Tenants scoped by property tab — 2026-09-08
+- Tenant profiles list only tenants with a stay on the **currently selected property** (McGregor vs Carindale no longer mixed).
+- Profile row uses the best stay on that property (current → upcoming → latest past).
+
 ## Add Property tab + Past tenant filter — 2026-09-08
 - Top property tabs: added **+ Property** (owner/manager) to create a new property + starter rooms.
 - Tenants: checked-out stays (`check_out <= today`) count as **past**; Current uses any still-active stay, not only highest stay id.

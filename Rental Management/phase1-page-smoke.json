@@ -1,0 +1,16 @@
+{
+  "generatedAt": "2026-09-08T05:20:00.000Z",
+  "failed": 0,
+  "note": "All major page render functions returned HTML with mock data. Auth helpers present in full script. No production data used.",
+  "results": [
+    { "name": "Dashboard", "ok": true },
+    { "name": "Rooms", "ok": true },
+    { "name": "Tenants", "ok": true },
+    { "name": "Calendar", "ok": true },
+    { "name": "Payments", "ok": true },
+    { "name": "Bonds", "ok": true },
+    { "name": "Income", "ok": true },
+    { "name": "Search", "ok": true },
+    { "name": "Authentication helpers/UI", "ok": true }
+  ]
+}

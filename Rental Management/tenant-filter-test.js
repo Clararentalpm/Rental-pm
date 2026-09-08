@@ -30,18 +30,42 @@ assert(sandbox.tenancyKind({check_out:'2099-01-01',check_in:'2020-01-01',status:
 assert(sandbox.tenancyKind({check_in:'2099-06-01',status:'upcoming',check_out:null})==='upcoming','future checkin => upcoming');
 
 Object.assign(sandbox.state,{
-  properties:[{id:1,name:'McGregor'}],
-  rooms:[{id:1,property_id:1,room_no:1}],
+  propertyId:1,
+  properties:[{id:1,name:'McGregor'},{id:2,name:'Carindale'}],
+  rooms:[{id:1,property_id:1,room_no:1},{id:10,property_id:2,room_no:1}],
   tenancies:[
     {id:1,tenant_id:9,room_id:1,check_in:'2025-01-01',check_out:'2025-06-01',status:'ended'},
     {id:2,tenant_id:9,room_id:1,check_in:'2026-01-01',check_out:null,status:'active'}
   ]
 });
 assert(sandbox.tenantProfileRow({id:9,name:'Test'}).kind==='current','profile prefers current over past');
+assert(sandbox.tenantProfileRow({id:9,name:'Test'}).onProperty===true,'on McGregor property');
 
 sandbox.state.tenancies=[{id:3,tenant_id:9,room_id:1,check_in:'2025-01-01',check_out:d,status:'active'}];
 assert(sandbox.tenantProfileRow({id:9,name:'Test'}).kind==='historical','checked-out only => past');
 
+// Cross-property: Carindale tenant must not appear under McGregor profile pick
+sandbox.state.tenancies=[
+  {id:4,tenant_id:20,room_id:10,check_in:'2026-01-01',check_out:null,status:'active'},
+  {id:5,tenant_id:21,room_id:1,check_in:'2026-01-01',check_out:null,status:'active'}
+];
+sandbox.state.propertyId=1;
+assert(sandbox.tenantProfileRow({id:20,name:'CarindaleOnly'}).onProperty===false,'Carindale tenant hidden on McGregor tab');
+assert(sandbox.tenantProfileRow({id:21,name:'McGregorOnly'}).onProperty===true,'McGregor tenant shown on McGregor tab');
+sandbox.state.propertyId=2;
+assert(sandbox.tenantProfileRow({id:20,name:'CarindaleOnly'}).onProperty===true,'Carindale tenant shown on Carindale tab');
+assert(sandbox.tenantProfileRow({id:21,name:'McGregorOnly'}).onProperty===false,'McGregor tenant hidden on Carindale tab');
+// Same person with stays on both properties — each tab shows that property's stay
+sandbox.state.tenancies=[
+  {id:6,tenant_id:30,room_id:1,check_in:'2026-02-01',check_out:null,status:'active'},
+  {id:7,tenant_id:30,room_id:10,check_in:'2025-01-01',check_out:'2025-03-01',status:'ended'}
+];
+sandbox.state.propertyId=1;
+assert(sandbox.tenantProfileRow({id:30,name:'Both'}).stay.id===6,'McGregor tab uses McGregor stay');
+sandbox.state.propertyId=2;
+assert(sandbox.tenantProfileRow({id:30,name:'Both'}).stay.id===7,'Carindale tab uses Carindale stay');
+
 assert(html.includes('add-property-tab'),'+ Property tab markup');
 assert(html.includes('id="property-dialog"'),'property dialog present');
+assert(html.includes('McGregor and Carindale tenants stay on their own property tab'),'tenants page scoped copy');
 console.log('tenant-filter-test passed');

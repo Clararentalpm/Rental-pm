@@ -308,7 +308,7 @@ Previous development examples (context only — **not** permanent production see
 - Room 1 — long-term tenant, approximately $200/week
 - Room 3 — Juny, long-term, approximately $210/week, originally recorded from 24 April
 - Room 4 — long-term male tenant, approximately $270/week, originally recorded from 14 July
-- Room 5 — Laura, short stay, approximately $35/day, check-in previously recorded as 11 September at 11:00, with an initial stay through at least 16 September
+- Room 5 — **Laura only** (not with Blackgun). Short stay **$35 AUD/day**. Check-in **11 September 15:00**, check-out **16 September 10:00**. Deposit **200 CNY (RMB)** paid to secure the room. Blackgun is a separate stay (already in system; do not merge with Laura).
 
 The database is the source of truth. Do not hard-code production tenant data into the application.
 

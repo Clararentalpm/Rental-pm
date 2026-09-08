@@ -1,0 +1,891 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rental PM</title>
+<style>
+:root{
+  --bg:#f3f6fa;--panel:#fff;--ink:#182230;--muted:#667085;--line:#e4e7ec;
+  --nav:#16243a;--nav2:#223654;--accent:#3157a4;--accentSoft:#edf3ff;
+  --green:#19714c;--greenSoft:#eaf7f0;--amber:#9a6700;--amberSoft:#fff6df;
+  --red:#b42318;--redSoft:#fff0ee;--purple:#6941c6;--purpleSoft:#f4f0ff;
+  font-size:15px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}button,input,select,textarea{font:inherit}
+.hidden{display:none!important}.muted{color:var(--muted)}.small{font-size:13px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:750;cursor:pointer}.btn.primary{background:var(--accent);color:white}.btn.ghost{background:white;border:1px solid var(--line)}.btn.dark{background:var(--nav);color:#fff}.btn.danger{background:var(--redSoft);color:var(--red)}.btn:disabled{opacity:.55;cursor:not-allowed}
+.linkbtn{border:0;background:transparent;color:var(--accent);font-weight:700;cursor:pointer;padding:7px}
+input,select,textarea{width:100%;border:1px solid #d9dde5;border-radius:10px;padding:10px 12px;background:#fff;color:var(--ink)}
+input:focus,select:focus,textarea:focus{outline:3px solid #dfe7ff;border-color:#8fa8ff}
+label{display:grid;gap:6px;font-weight:700;font-size:12px}
+.boot,.auth-shell,.fatal{min-height:100vh;display:grid;place-items:center;padding:24px}
+.auth-card{width:min(100%,430px);background:#fff;border:1px solid var(--line);border-radius:20px;padding:28px;box-shadow:0 18px 60px #14203c14}
+.auth-card h1{margin:6px 0}.brand{font-weight:900;color:var(--accent);letter-spacing:.04em}
+.auth-grid{display:grid;gap:13px;margin-top:18px}.note,.error{padding:10px 12px;border-radius:10px;font-size:13px;margin-top:10px}.note{background:#eef7ff;color:#24537a}.error{background:var(--redSoft);color:var(--red)}
+.spinner{width:28px;height:28px;border:3px solid #dfe3ea;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.app{display:grid;grid-template-columns:246px 1fr;min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#fff;padding:18px 12px;display:flex;flex-direction:column;gap:18px}
+.side-brand{display:flex;align-items:center;gap:10px;padding:6px}.logo{width:38px;height:38px;border-radius:11px;background:#fff;color:var(--nav);display:grid;place-items:center;font-weight:900}.brand-title{font-weight:850}.nav{display:grid;gap:4px}.nav button{border:0;background:transparent;color:#c9ced8;text-align:left;padding:11px 12px;border-radius:9px;cursor:pointer}.nav button.active,.nav button:hover{background:var(--nav2);color:#fff}.side-bottom{margin-top:auto;display:grid;gap:8px}.side-bottom .btn{background:#242a34;color:#fff;border:1px solid #353c48}
+.main{min-width:0}.topbar{position:sticky;top:0;z-index:5;background:#ffffffee;backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:18px 26px;display:flex;justify-content:space-between;align-items:end;gap:16px}.topbar h1{margin:8px 0 0;font-size:29px;letter-spacing:-.02em}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab{border:1px solid var(--line);background:#fff;color:var(--muted);padding:6px 11px;border-radius:999px;cursor:pointer}.tab.active{background:var(--accentSoft);border-color:#cbd6ff;color:#2441a8;font-weight:750}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sync{font-size:12px;border-radius:999px;padding:6px 10px;background:var(--greenSoft);color:var(--green)}
+.content{padding:22px 26px 50px;display:grid;gap:18px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric,.panel{background:#fff;border:1px solid var(--line);border-radius:16px}.metric{padding:20px;box-shadow:0 3px 12px #1018280a;min-height:112px}.metric strong{letter-spacing:-.02em}.metric span{font-size:13px;color:var(--muted)}.metric strong{display:block;font-size:31px;margin:5px 0}.metric small{color:var(--muted)}
+.panel{padding:20px;box-shadow:0 4px 16px #1018280a}.panel+.panel{margin-top:2px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel-head h2{font-size:19px;margin:0}.seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{border:1px solid var(--line);background:#fff;padding:7px 10px;border-radius:9px;cursor:pointer}.seg button.active{background:var(--nav);color:#fff;border-color:var(--nav)}
+.room-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.room-card{border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 2px 8px #10182808}.room-head{display:flex;justify-content:space-between;align-items:center}.room-card h3{margin:0;font-size:18px}.occupant{font-size:20px;font-weight:850;margin:13px 0 4px}.subline{font-size:12px;color:var(--muted)}.nextline{margin-top:11px;padding-top:9px;border-top:1px solid var(--line);font-size:12px}.room-actions{display:flex;gap:6px;margin-top:12px}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef0f3;color:#4f5661;font-size:11px;text-transform:capitalize}.badge.active,.badge.paid{background:var(--greenSoft);color:var(--green)}.badge.upcoming{background:var(--accentSoft);color:#3853b8}.badge.ensuite{background:var(--amberSoft);color:var(--amber)}.badge.historical{background:#f0f1f3;color:#606773}.badge.current{background:var(--accentSoft);color:#3157a4}.badge.overdue{background:var(--redSoft);color:var(--red)}.badge.available{background:var(--greenSoft);color:var(--green)}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}th{background:#fafbfc;color:#59616d;font-size:11px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}
+.empty{padding:28px;text-align:center;color:var(--muted)}
+.calendar90{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:8px}
+.weekday{padding:9px 8px;text-align:center;font-size:13px;font-weight:850;color:#475467;background:#f8fafc;border:1px solid var(--line);border-radius:9px}
+.day90{min-height:104px;border:1px solid var(--line);border-radius:11px;background:#fff;padding:9px;display:grid;align-content:start;gap:6px}
+.day90.weekend{background:#fafbff}.day90.out{opacity:.42}.date90{display:flex;justify-content:space-between;gap:5px;font-weight:850}.date90 small{font-weight:650;color:var(--muted)}
+.staychip{font-size:12px;border-radius:7px;padding:5px 6px;background:var(--accentSoft);color:#294b91;border-left:3px solid var(--accent)}
+.staychip.upcoming{background:var(--purpleSoft);color:var(--purple);border-left-color:var(--purple)}
+.staychip.depart{background:var(--amberSoft);color:var(--amber);border-left-color:var(--amber)}
+.view-switch{display:flex;gap:6px;background:#f2f4f7;padding:4px;border-radius:10px}.view-switch button{border:0;background:transparent;padding:8px 12px;border-radius:8px;font-weight:800;cursor:pointer}.view-switch button.active{background:#fff;box-shadow:0 1px 4px #10182818;color:var(--accent)}
+.finder{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end}.vacancy-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}.vacancy-card h3{margin:0 0 8px}.vacancy-slot{padding:7px 9px;margin-top:6px;border-radius:8px;background:var(--greenSoft);color:var(--green);font-weight:750}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted)}.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px}.cal-cell{min-height:38px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px;font-size:10px}.cal-cell.head{background:#fafbfc;font-weight:800;position:sticky;top:0}.cal-cell.room{position:sticky;left:0;background:#fff;z-index:2;font-weight:800}.cal-cell.occupied{background:#eaf0ff;color:#2547b6}.cal-cell.arrival{box-shadow:inset 3px 0 0 #2d5bff}.cal-cell.departure{box-shadow:inset -3px 0 0 #b42318}
+.price-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-card{border:1px solid var(--line);border-radius:13px;padding:14px;background:#fff;box-shadow:0 2px 10px #10182808}.alert-card strong{font-size:24px}.alert-card strong{display:block;font-size:22px;margin-top:4px}.tenant-actions{display:flex;gap:6px;flex-wrap:wrap}.danger-text{color:var(--red);font-weight:750}dl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0 0}dt{font-size:11px;color:var(--muted)}dd{margin:0;text-align:right;font-size:12px;font-weight:750}
+dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px));box-shadow:0 30px 100px #0005}dialog::backdrop{background:#10141c7a}.dialog-body{padding:21px}.dialog-head{display:flex;justify-content:space-between;align-items:flex-start}.dialog-head h2{margin:0}.close{border:0;background:#f1f3f6;border-radius:50%;width:34px;height:34px;font-size:21px;cursor:pointer}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.toast{position:fixed;right:20px;bottom:20px;background:var(--nav);color:#fff;padding:11px 14px;border-radius:10px;box-shadow:0 10px 34px #0003;z-index:50}
+@media(max-width:950px){.app{grid-template-columns:82px 1fr}.side-brand>div:last-child,.nav button{font-size:0}.nav button::first-letter{font-size:14px}.metrics{grid-template-columns:repeat(2,1fr)}.room-grid{grid-template-columns:repeat(2,1fr)}.price-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:950px){.alert-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.calendar90{grid-template-columns:repeat(7,minmax(125px,1fr));min-width:875px}.panel:has(.calendar90){overflow:auto}}
+@media(max-width:650px){body{font-size:16px}.content{gap:14px}.panel{padding:16px}.metric{min-height:auto}.btn{min-height:42px}.app{display:block}.sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:auto;height:auto;z-index:20;padding:7px}.side-brand,.side-bottom{display:none}.nav{grid-template-columns:repeat(4,1fr)}.nav button{font-size:10px!important;text-align:center;padding:8px 2px}.topbar{padding:14px;align-items:flex-start}.content{padding:14px 14px 88px}.metrics,.room-grid,.price-grid,.alert-grid,.form-grid{grid-template-columns:1fr}.actions .sync{display:none}}
+</style>
+<style>
+.tenant-tools{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:16px 0;flex-wrap:wrap}.search-input{min-width:320px;max-width:580px;height:44px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:15px;background:#fff}.income-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:18px 0 24px}.income-kpis .metric{min-height:118px}.income-kpis .metric:first-child{border-top:4px solid var(--green)}table th{white-space:nowrap;background:#f8fafc}table td,table th{vertical-align:middle}.panel-head h2,.panel-head h3{margin:0}@media(max-width:1100px){.income-kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.income-kpis{grid-template-columns:1fr}.search-input{min-width:100%;width:100%}}
+</style><style>
+.income-dashboard{padding:24px}.income-kpis{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:14px!important;margin:22px 0 30px!important}.income-kpis .metric{min-height:132px;padding:20px;border:1px solid var(--line);border-radius:14px;background:#fff}.income-kpis .metric span{font-size:13px;font-weight:750;color:var(--muted);text-transform:uppercase;letter-spacing:.025em}.income-kpis .metric strong{display:block;font-size:28px;margin:12px 0 8px}.income-kpis .metric small{color:var(--muted)}.income-kpis .income-total{border-top:4px solid var(--green);background:#fbfefd}.income-history-head{margin-top:8px}@media(max-width:1150px){.income-kpis{grid-template-columns:repeat(2,1fr)!important}}@media(max-width:650px){.income-kpis{grid-template-columns:1fr!important}}
+</style><style>
+.income-page-only{display:block;width:100%}
+.income-hero{padding:24px 26px;margin-bottom:16px;border:1px solid var(--line);border-radius:16px;background:#fff}
+.income-hero h2{font-size:28px;margin:5px 0 4px}.income-hero p{margin:0;color:var(--muted)}
+.eyebrow{font-size:11px;font-weight:800;letter-spacing:.12em;color:var(--green)}
+.income-card-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.income-card{min-height:150px;padding:20px;border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.04)}
+.income-card.primary{border-top:5px solid var(--green)}
+.income-label{min-height:38px;font-size:13px;font-weight:800;line-height:1.35;color:#536171}
+.income-value{font-size:30px;font-weight:850;letter-spacing:-.03em;margin:14px 0 9px;color:#15202b}
+.income-note{font-size:12px;color:var(--muted)}.income-history{margin-top:0}
+@media(max-width:1150px){.income-card-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:650px){.income-card-grid{grid-template-columns:1fr}.income-card{min-height:125px}}
+</style></head>
+<body>
+<div id="boot" class="boot"><div style="display:flex;align-items:center;gap:14px"><div class="spinner"></div><div><strong>Starting Rental PM…</strong><div class="muted small">This screen will not stay stuck indefinitely.</div></div></div></div>
+
+<section id="auth" class="auth-shell hidden">
+  <div class="auth-card">
+    <div class="brand">Rental PM</div>
+    <h1 id="auth-title">Staff sign in</h1>
+    <p id="auth-sub" class="muted">Use your existing Rental PM staff account.</p>
+    <div id="signin-box">
+      <div class="auth-grid">
+        <label>Email<input id="email" type="email" autocomplete="username"></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password"></label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
+        <button id="signin" class="btn dark">Sign in</button>
+        <button id="forgot" class="linkbtn">Forgot password?</button>
+      </div>
+      <div id="auth-msg" class="note hidden"></div>
+      <div id="auth-err" class="error hidden"></div>
+    </div>
+    <div id="reset-box" class="hidden">
+      <h2 id="setup-title">Set new password</h2>
+      <div class="auth-grid">
+        <label>New password<input id="newpw" type="password" minlength="8"></label>
+        <label>Confirm new password<input id="newpw2" type="password" minlength="8"></label>
+      </div>
+      <button id="setpw" class="btn dark" style="margin-top:14px">Set new password</button>
+      <div id="reset-msg" class="note hidden"></div>
+      <div id="reset-err" class="error hidden"></div>
+    </div>
+  </div>
+</section>
+
+<section id="fatal" class="fatal hidden"><div class="auth-card"><h1>Rental PM could not start</h1><p id="fatal-msg"></p><button class="btn dark" onclick="location.reload()">Retry</button></div></section>
+
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="side-brand"><div class="logo">R</div><div><div class="brand-title">Rental PM</div><div class="muted small">V6.5.2</div><div id="me" class="muted small"></div></div></div>
+    <nav id="nav" class="nav">
+      <button data-page="overview" class="active">Overview</button>
+      <button data-page="tenants">Tenants</button>
+      <button data-page="rooms">Room Profiles</button>
+      <button data-page="availability">Availability</button>
+      <button data-page="payments">Payments</button>
+      <button data-page="income">Income</button>
+      <button data-page="bonds">Bond & Refund</button>
+      <button data-page="pricing">Price History</button>
+      <button data-page="staff">Staff Access</button>
+      <button data-page="history">History</button>
+    </nav>
+    <div class="side-bottom"><button id="refresh" class="btn">Refresh</button><button id="logout" class="btn">Sign out</button></div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div><div id="property-tabs" class="tabs"></div><h1 id="title">Overview</h1></div>
+      <div class="actions"><span id="sync" class="sync">Ready</span><button id="new-stay" class="btn primary">+ New stay</button></div>
+    </header>
+    <div id="content" class="content"></div>
+  </main>
+</div>
+
+<dialog id="stay-dialog"><form id="stay-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Add a new tenant and allocate a room.</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Tenant name<input name="name" required></label>
+    <label>Contact method<input name="contact_method" placeholder="Phone / WeChat / Email"></label>
+    <label>Room<select name="room_id" required></select></label>
+    <label>Stay type<select name="tenancy_type"><option value="long_term">Long term</option><option value="short_term">Short stay</option></select></label>
+    <label>Check-in<input name="check_in" type="date"></label>
+    <label>Check-in time<input name="check_in_time" type="time"></label>
+    <label>Confirmed until<input name="confirmed_until" type="date"></label>
+    <label>Rent amount<input name="rent_amount" type="number" step="0.01"></label>
+    <label>Rent period<select name="rent_period"><option value="week">Week</option><option value="day">Day</option><option value="night">Night</option><option value="total">Total</option></select></label>
+    <label>Payment cycle (weeks)<input name="payment_cycle_weeks" type="number" min="1"></label>
+    <label>People count<input name="people_count" type="number" min="1" value="1"></label>
+    <label><span>Bills included</span><select name="bills_included"><option value="false">No</option><option value="true">Yes</option></select></label>
+  </div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="stay-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="stay-dialog">Cancel</button><button class="btn primary">Save stay</button></div>
+</form></dialog>
+
+<dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Record rent payment</h2></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Tenancy<select name="tenancy_id" required></select></label>
+    <label>Amount<input name="amount" type="number" step="0.01" required></label>
+    <label>Period start<input name="period_start" type="date"></label>
+    <label>Period end<input name="period_end" type="date"></label>
+    <label>Received date<input name="received_date" type="date"></label>
+    <label>Payment method<input name="payment_method" placeholder="Cash / Transfer"></label>
+  </div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="payment-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="payment-dialog">Cancel</button><button class="btn primary">Save payment</button></div>
+</form></dialog>
+
+<dialog id="bond-dialog"><form id="bond-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Add bond / deposit</h2></div><button type="button" class="close" data-close="bond-dialog">×</button></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Tenancy<select name="tenancy_id" required></select></label>
+    <label>Type<select name="bond_type"><option value="rental_bond">Rental bond</option><option value="deposit">Deposit</option><option value="bond">Bond</option></select></label>
+    <label>Amount<input name="amount" type="number" step="0.01" required></label>
+    <label>Currency<select name="original_currency"><option>AUD</option><option>CNY</option></select></label>
+    <label>Received date<input name="received_date" type="date"></label>
+    <label>Received via<input name="received_via" placeholder="Cash / Transfer"></label>
+  </div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="bond-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-dialog">Cancel</button><button class="btn primary">Save bond</button></div>
+</form></dialog>
+
+<dialog id="room-dialog"><form id="room-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Edit room profile</h2><div id="room-dialog-name" class="muted small"></div></div><button type="button" class="close" data-close="room-dialog">×</button></div>
+  <input type="hidden" name="room_id">
+  <div class="form-grid" style="margin-top:14px">
+    <label>Room type<input name="room_type"></label><label>Capacity<input name="capacity" type="number"></label>
+    <label>Bathroom type<input name="bathroom_type"></label><label>Beds<input name="beds" type="number"></label>
+    <label>Standard price<input name="standard_price" type="number" step="0.01"></label><label>Current asking price<input name="current_asking_price" type="number" step="0.01"></label>
+    <label>Peak min<input name="peak_price_min" type="number" step="0.01"></label><label>Peak max<input name="peak_price_max" type="number" step="0.01"></label>
+    <label>Off-peak min<input name="off_peak_min" type="number" step="0.01"></label><label>Off-peak max<input name="off_peak_max" type="number" step="0.01"></label>
+    <label>Short stay min<input name="short_stay_min" type="number" step="0.01"></label><label>Short stay max<input name="short_stay_max" type="number" step="0.01"></label>
+    <label>Short stay unit<input name="short_stay_unit" placeholder="night / day"></label><label>Extra bed fee<input name="extra_bed_fee" type="number" step="0.01"></label>
+  </div>
+  <label style="margin-top:12px">Amenities<textarea name="amenities" rows="2"></textarea></label>
+  <label style="margin-top:12px">Pricing note<textarea name="pricing_note" rows="2"></textarea></label>
+  <div id="room-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="room-dialog">Cancel</button><button class="btn primary">Save room profile</button></div>
+</form></dialog>
+
+
+<dialog id="tenancy-dialog"><form id="tenancy-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Edit tenancy</h2><div id="tenancy-dialog-name" class="muted small"></div></div><button type="button" class="close" data-close="tenancy-dialog">×</button></div>
+  <input type="hidden" name="id">
+  <div class="form-grid" style="margin-top:14px">
+    <label>Room<select name="room_id"></select></label>
+    <label>Status<select name="status"><option value="active">Active</option><option value="upcoming">Upcoming</option><option value="historical">Historical</option><option value="ended">Ended</option></select></label>
+    <label>Check-in<input name="check_in" type="date"></label>
+    <label>Check-in time<input name="check_in_time" type="time"></label>
+    <label>Confirmed until<input name="confirmed_until" type="date"></label>
+    <label style="display:flex;gap:8px;align-items:center;justify-content:flex-start"><input id="no-checkout" name="no_checkout" type="checkbox" style="width:auto"> No checkout date — Long-term / ongoing</label>
+    <label>Check-out<input name="check_out" type="date"></label>
+    <label>Check-out time<input name="check_out_time" type="time"></label>
+    <label>Rent amount<input name="rent_amount" type="number" step="0.01"></label>
+    <label>Rent period<select name="rent_period"><option value="week">Week</option><option value="day">Day</option><option value="night">Night</option><option value="total">Total</option></select></label>
+    <label>Payment cycle (weeks)<input name="payment_cycle_weeks" type="number" min="1"></label>
+    <label>People count<input name="people_count" type="number" min="1"></label>
+    <label>Sleeping location<input name="sleeping_location" placeholder="Optional, e.g. Living Room"></label>
+  </div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="tenancy-error" class="error hidden"></div>
+  <div class="dialog-actions">
+    <button type="button" id="end-tenancy" class="btn danger">End tenancy</button>
+    <button type="button" class="btn ghost" data-close="tenancy-dialog">Cancel</button>
+    <button class="btn primary">Save changes</button>
+  </div>
+</form></dialog>
+
+<dialog id="tenant-dialog"><form id="tenant-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Edit tenant</h2></div><button type="button" class="close" data-close="tenant-dialog">×</button></div>
+  <input type="hidden" name="id">
+  <div class="form-grid" style="margin-top:14px">
+    <label>Name<input name="name" required></label>
+    <label>Gender<input name="gender"></label>
+    <label>Contact method<input name="contact_method"></label>
+  </div>
+  <label style="margin-top:12px">Tenant notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="tenant-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="tenant-dialog">Cancel</button><button class="btn primary">Save tenant</button></div>
+</form></dialog>
+
+<dialog id="bond-action-dialog"><form id="bond-action-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Bond / deposit action</h2><div id="bond-action-name" class="muted small"></div></div><button type="button" class="close" data-close="bond-action-dialog">×</button></div>
+  <input type="hidden" name="bond_id">
+  <div class="form-grid" style="margin-top:14px">
+    <label>Action<select name="action"><option value="partial_refund">Partial refund</option><option value="full_refund">Full refund</option><option value="deduction">Deduction</option><option value="note">Note only</option></select></label>
+    <label>Amount<input name="amount" type="number" step="0.01"></label>
+    <label>Method<input name="method" placeholder="Transfer / Cash"></label>
+    <label>Reference<input name="reference"></label>
+  </div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
+  <div id="bond-action-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-action-dialog">Cancel</button><button class="btn primary">Save action</button></div>
+</form></dialog>
+
+<dialog id="invite-dialog"><form id="invite-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Owner only. The invited staff member will receive an email to set their password. If they do not receive it, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Email<input name="email" type="email" required></label>
+    <label>Display name<input name="display_name"></label>
+    <label>Role<select name="role"><option value="viewer">Viewer</option><option value="manager">Manager</option></select></label>
+  </div>
+  <div id="invite-error" class="error hidden"></div>
+  <div id="invite-note" class="note hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="invite-dialog">Cancel</button><button class="btn primary">Send invite</button></div>
+</form></dialog>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+const SB_URL='https://odezjuvqmnkzmcnezoyq.supabase.co';
+const SB_KEY='sb_publishable_iQCs8hCyYIysIUykBFBBDQ_O34chdHQ';
+const STORE='rental-pm-v6-session';
+const CANONICAL_URL='https://rental-pm-v2.netlify.app/';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const today=()=>new Date().toISOString().slice(0,10);
+const money=(v,c='AUD')=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('en-AU',{style:'currency',currency:c,maximumFractionDigits:0}).format(Number(v));
+const fmtDate=v=>v?new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(v+'T00:00:00')):'—';
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
+let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',me:null};
+
+function getSession(){try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch{return null}}
+function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
+function clearSession(){localStorage.removeItem(STORE)}
+function timeout(ms=12000){const c=new AbortController(),id=setTimeout(()=>c.abort(),ms);return{c,done:()=>clearTimeout(id)}}
+async function parse(r){const text=await r.text();let b={};try{b=text?JSON.parse(text):{}}catch{b={message:text}}if(!r.ok)throw new Error(b.msg||b.message||b.error_description||b.error||`Request failed (${r.status})`);return b}
+async function raw(path,opts={},auth=true){
+  let s=getSession(); const t=timeout();
+  try{
+    const headers={apikey:SB_KEY,'Content-Type':'application/json',...(opts.headers||{})};
+    headers.Authorization=`Bearer ${auth?(s?.access_token||SB_KEY):SB_KEY}`;
+    return await parse(await fetch(SB_URL+path,{...opts,headers,signal:t.c.signal}));
+  }catch(e){if(e.name==='AbortError')throw new Error('Request timed out. Please wait and retry once.');throw e}finally{t.done()}
+}
+async function signIn(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
+async function refreshSession(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
+async function api(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
+const select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
+const insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+const patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+
+function showAuth(msg='',err=''){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#app').classList.add('hidden');$('#fatal').classList.add('hidden');$('#auth').classList.remove('hidden');$('#auth-msg').textContent=msg;$('#auth-msg').classList.toggle('hidden',!msg);$('#auth-err').textContent=err;$('#auth-err').classList.toggle('hidden',!err)}
+function showApp(){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#auth').classList.add('hidden');$('#fatal').classList.add('hidden');$('#app').classList.remove('hidden')}
+function fatal(m){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#auth').classList.add('hidden');$('#app').classList.add('hidden');$('#fatal-msg').textContent=m;$('#fatal').classList.remove('hidden')}
+window.__bootTimer=setTimeout(()=>{if(!$('#boot').classList.contains('hidden'))fatal('Startup exceeded 8 seconds. The app stopped waiting instead of staying on Loading.')},8000);
+
+function roomBy(id){return state.rooms.find(r=>Number(r.id)===Number(id))}
+function propertyBy(id){return state.properties.find(p=>Number(p.id)===Number(id))}
+function property(){return propertyBy(state.propertyId)}
+function tenantBy(id){return state.tenants.find(t=>Number(t.id)===Number(id))}
+function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';return `${propertyBy(r.property_id)?.name||''} Room ${r.room_no}`}
+function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId))}
+function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
+function tenancyPayments(t){
+  return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&String(p.status||'').toLowerCase()==='paid'&&p.period_start&&p.period_end)
+    .sort((a,b)=>String(a.period_start).localeCompare(String(b.period_start)));
+}
+function paidThrough(t){
+  const ps=tenancyPayments(t);if(!ps.length)return null;
+  return ps.reduce((mx,p)=>!mx||p.period_end>mx?p.period_end:mx,null);
+}
+function nextRentDue(t){
+  if(!t.check_in)return null;
+  if(t.status==='upcoming'&&t.check_in>today())return t.check_in;
+  const through=paidThrough(t);
+  if(through)return addDays(through,1);
+  return t.check_in;
+}
+function rentState(t){
+  if(t.status==='upcoming'&&t.check_in>today())return 'upcoming';
+  if(t.check_out&&t.check_out<=today())return 'completed';
+  const due=nextRentDue(t);if(!due)return 'unknown';
+  const delta=Math.floor((new Date(due+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
+  if(delta<0)return 'overdue';
+  if(delta===0)return 'due today';
+  if(paidThrough(t)&&paidThrough(t)>=today())return 'paid';
+  if(delta<=3)return 'due soon';
+  return 'ok';
+}
+function overdueDays(t){
+  if(rentState(t)!=='overdue')return 0;
+  return Math.max(0,Math.floor((new Date(today()+'T00:00:00')-new Date(nextRentDue(t)+'T00:00:00'))/86400000));
+}
+function tenancyKind(t){
+  const d=today();
+  if(t.check_out && t.check_out<d)return'historical';
+  if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return'historical';
+  if((t.check_in&&t.check_in>d)||t.status==='upcoming')return'upcoming';
+  return'current';
+}
+function badge(v){return `<span class="badge ${esc(v)}">${esc(v.replaceAll('_',' '))}</span>`}
+
+function addDays(iso,days){if(!iso)return null;const d=new Date(iso+'T00:00:00');d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)}
+function latestPaymentForTenancy(id){return state.payments.filter(p=>Number(p.tenancy_id)===Number(id)&&p.status!=='unpaid').sort((a,b)=>(b.period_end||b.received_date||'').localeCompare(a.period_end||a.received_date||''))[0]||null}
+
+
+
+
+
+function bondForTenancy(id){return state.bonds.find(b=>Number(b.tenancy_id)===Number(id))}
+function bondRemaining(b){
+  if(!b)return null;
+  if(b.remaining_amount!==null&&b.remaining_amount!==undefined)return Number(b.remaining_amount);
+  const refunded=Number(b.refund_amount||0),deduct=Number(b.deduction_amount||0);
+  return Math.max(0,Number(b.amount||0)-refunded-deduct);
+}
+
+function role(){return state.me?.role||'viewer'}
+function canEdit(){return ['owner','manager'].includes(role())}
+
+async function loadAll(){
+  $('#sync').textContent='Syncing…';
+  const req=[
+    select('properties','select=*&order=id'),
+    select('rooms','select=*&order=property_id,room_no'),
+    select('tenants','select=*&order=id'),
+    select('tenancies','select=*&order=id'),
+    select('bonds','select=*&order=id'),
+    select('rent_payments','select=*&order=id'),
+    select('profiles','select=*'),
+    select('room_profiles','select=*'),
+    select('room_price_history','select=*&order=created_at.desc'),
+    select('activity_log','select=*&order=created_at.desc&limit=50'),
+    select('bond_payment_events','select=*&order=created_at.desc'),
+    select('bond_refund_events','select=*&order=created_at.desc')
+  ];
+  const keys=['properties','rooms','tenants','tenancies','bonds','payments','profiles','roomProfiles','priceHistory','activity','bondEvents','bondRefundEvents'];
+  const rs=await Promise.allSettled(req);let errs=[];
+  rs.forEach((r,i)=>{if(r.status==='fulfilled')state[keys[i]]=r.value||[];else errs.push(`${keys[i]}: ${r.reason.message}`)});
+  if(!state.properties.length)throw new Error(errs[0]||'No property data returned.');
+  if(!state.propertyId||!state.properties.some(p=>Number(p.id)===Number(state.propertyId)))state.propertyId=state.properties[0].id;
+  const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
+  $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'viewer'}`;
+  $('#new-stay').classList.toggle('hidden',!canEdit());
+  renderChrome();render();
+  $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
+}
+function renderChrome(){
+  $('#property-tabs').innerHTML=state.properties.map(p=>`<button class="tab ${Number(p.id)===Number(state.propertyId)?'active':''}" data-prop="${p.id}">${esc(p.name)}</button>`).join('');
+  $$('#property-tabs [data-prop]').forEach(b=>b.onclick=()=>{state.propertyId=Number(b.dataset.prop);renderChrome();render()});
+}
+function setPage(p){
+ state.page=p;
+ const names={overview:'Overview',tenants:'Tenants',rooms:'Room Profiles',availability:'Availability',payments:'Payments',income:'Income',bonds:'Bond & Refund',pricing:'Price History',staff:'Staff Access',history:'History'};
+ $('#title').textContent=names[p]||'Rental PM';
+ $$('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));
+ render();
+}
+
+function overviewPage(){
+  const rooms=currentPropertyRooms(), ts=scopedTenancies(), current=ts.filter(t=>tenancyKind(t)==='current'), upcoming=ts.filter(t=>tenancyKind(t)==='upcoming');
+  const weekly=current.filter(t=>t.rent_period==='week').reduce((s,t)=>s+Number(t.rent_amount||0),0);
+  const tenancyIds=new Set(ts.map(t=>Number(t.id)));
+  const propPays=state.payments.filter(p=>tenancyIds.has(Number(p.tenancy_id))&&p.status!=='unpaid');
+  const now=new Date(today()+'T12:00:00'), dow=(now.getDay()+6)%7;
+  const weekStart=new Date(now);weekStart.setDate(now.getDate()-dow);
+  const weekEnd=new Date(weekStart);weekEnd.setDate(weekStart.getDate()+6);
+  const ws=weekStart.toISOString().slice(0,10),we=weekEnd.toISOString().slice(0,10);
+  const monthStart=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+  const monthEndDate=new Date(now.getFullYear(),now.getMonth()+1,0),monthEnd=monthEndDate.toISOString().slice(0,10);
+  const weeklyIncome=propPays.filter(p=>p.received_date>=ws&&p.received_date<=we).reduce((s,p)=>s+Number(p.amount||0),0);
+  const monthlyIncome=propPays.filter(p=>p.received_date>=monthStart&&p.received_date<=monthEnd).reduce((s,p)=>s+Number(p.amount||0),0);
+  const avgWeeklyIncome=monthlyIncome/(monthEndDate.getDate()/7);
+  const openBonds=state.bonds.filter(b=>b.received&&!b.refunded&&ts.some(t=>t.id===b.tenancy_id)).length;
+  const horizon=addDays(today(),7);
+  const arrivals=ts.filter(t=>t.check_in&&t.check_in>=today()&&t.check_in<=horizon&&tenancyKind(t)!=='historical');
+  const departures=ts.filter(t=>{const d=t.check_out||t.confirmed_until;return d&&d>=today()&&d<=horizon});
+  const overdue=ts.filter(t=>rentState(t)==='overdue');
+  const bondsToRefund=state.bonds.filter(b=>{
+    const t=state.tenancies.find(x=>x.id===b.tenancy_id),d=t?.check_out||t?.confirmed_until;
+    return b.received&&!b.refunded&&d&&d<=horizon;
+  });
+  const cards=rooms.map(r=>{
+    const cur=current.filter(t=>Number(t.room_id)===Number(r.id));
+    const next=upcoming.filter(t=>Number(t.room_id)===Number(r.id)).sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''))[0];
+    const rp=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
+    return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
+      <div class="occupant">${cur.length?cur.map(t=>esc(tenantBy(t.tenant_id)?.name||'Tenant')).join(' + '):'<span class="muted">Vacant now</span>'}</div>
+      <div class="subline">${cur.length?cur.map(t=>`${money(t.rent_amount)} / ${esc(t.rent_period||'period')}`).join(' · '):''}</div>
+      ${next?`<div class="nextline"><b>Next:</b> ${esc(tenantBy(next.tenant_id)?.name||'Tenant')} · ${fmtDate(next.check_in)}</div>`:''}
+      <div class="nextline"><b>Asking:</b> ${money(rp.current_asking_price)} &nbsp; <b>Standard:</b> ${money(rp.standard_price)}</div>
+      ${canEdit()?`<div class="room-actions"><button class="btn ghost edit-room" data-room="${r.id}">Edit room</button></div>`:''}
+    </article>`
+  }).join('');
+  return `<div class="metrics">
+    <div class="metric" style="border-top:4px solid var(--accent)"><span>Rooms</span><strong>${rooms.length}</strong><small>${current.length} current tenancies</small></div>
+    <div class="metric" style="border-top:4px solid var(--purple)"><span>Upcoming</span><strong>${upcoming.length}</strong><small>scheduled arrivals</small></div>
+    <div class="metric" style="border-top:4px solid var(--green)"><span>Weekly rent</span><strong>${money(weekly)}</strong><small>current weekly tenancies</small></div>
+    <div class="metric" style="border-top:4px solid var(--amber)"><span>Open bonds</span><strong>${openBonds}</strong><small>received, not refunded</small></div>
+    <div class="metric" style="border-top:4px solid var(--green)"><span>Weekly income</span><strong>${money(weeklyIncome)}</strong><small>${fmtDate(ws)} → ${fmtDate(we)} · actual received</small></div>
+    <div class="metric" style="border-top:4px solid var(--accent)"><span>Average weekly income · this month</span><strong>${money(avgWeeklyIncome)}</strong><small>${now.toLocaleString('en-AU',{month:'long',year:'numeric'})} · based on actual received</small></div>
+  </div>
+  <div class="alert-grid">
+    <div class="alert-card"><span class="muted small">Arrivals · next 7 days</span><strong>${arrivals.length}</strong><div class="small">${arrivals.slice(0,3).map(t=>`${fmtDate(t.check_in)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Departures · next 7 days</span><strong>${departures.length}</strong><div class="small">${departures.slice(0,3).map(t=>`${fmtDate(t.check_out||t.confirmed_until)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Rent overdue / due today</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(t=>`${esc(tenantBy(t.tenant_id)?.name||'')} · ${fmtDate(nextRentDue(t))}`).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(t?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None'}</div></div>
+  </div>
+  <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current property only</span></div><div class="room-grid">${cards}</div></section>
+  <section class="panel"><div class="panel-head"><h2>Current & upcoming stays</h2><div class="seg">${['current','upcoming','historical'].map(v=>`<button class="${state.view===v?'active':''}" data-view="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div></div>${tenancyTable(ts.filter(t=>tenancyKind(t)===state.view),true)}</section>`;
+}
+function tenancyTable(rows,showActions=false){
+  if(!rows.length)return'<div class="empty">No records in this view.</div>';
+  return `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Check-in</th><th>Until / Check-out</th><th>Rent</th><th>Next due</th><th>Bond</th><th>Status</th>${showActions?'<th>Actions</th>':''}</tr></thead><tbody>
+  ${rows.sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')).map(t=>{
+    const b=bondForTenancy(t.id),due=nextRentDue(t),rs=rentState(t);
+    return `<tr><td><b>${esc(tenantBy(t.tenant_id)?.name||'Tenant')}</b><div class="muted small">${esc(t.notes||'')}</div></td><td>${esc(roomLabel(t.room_id))}</td><td>${esc((t.tenancy_type||'').replace('_',' '))}</td><td>${fmtDate(t.check_in)}${t.check_in_time?`<div class="muted small">${esc(t.check_in_time.slice(0,5))}</div>`:''}</td><td>${fmtDate(t.check_out||t.confirmed_until)}</td><td>${money(t.rent_amount)} / ${esc(t.rent_period||'—')}<div class="muted small">${t.payment_cycle_weeks?`every ${t.payment_cycle_weeks} wk`:''}</div></td><td>${fmtDate(due)}${rs==='overdue'?`<div class="danger-text small">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</div>`:rs==='due today'?'<div class="small" style="color:var(--red);font-weight:800">Due today</div>':rs==='due soon'?'<div class="small" style="color:var(--amber)">Due soon</div>':''}</td><td>${b?`${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} remaining`:'—'}</td><td>${badge(tenancyKind(t))}</td>${showActions?`<td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${t.tenant_id}">Tenant</button><button class="btn ghost edit-tenancy" data-tenancy="${t.id}">Stay</button></div>`:'—'}</td>`:''}</tr>`;
+  }).join('')}
+  </tbody></table></div>`;
+}
+function tenantsPage(){
+  const q=(state.tenantSearch||'').trim().toLowerCase(),filter=state.tenantFilter||'current';
+  const rows=state.tenants.map(tenant=>{
+    const stays=state.tenancies.filter(x=>x.tenant_id===tenant.id).sort((a,b)=>b.id-a.id);
+    const stay=stays[0],r=stay?roomBy(stay.room_id):null,p=r?state.properties.find(x=>x.id===r.property_id):null,kind=stay?tenancyKind(stay):'historical';
+    return {tenant,stay,p,r,kind};
+  }).filter(x=>filter==='all'||(filter==='past'?x.kind==='historical':x.kind===filter))
+    .sort((a,b)=>(a.tenant.name||'').localeCompare(b.tenant.name||''));
+  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small">Search current, upcoming and previous tenants.</span></div></div>
+  <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, property, room, stay type or notes…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
+  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
+}
+function roomsPage(){
+  return `<section class="panel"><div class="panel-head"><h2>Room profiles</h2><span class="muted small">Pricing, capacity and amenities</span></div><div class="room-grid">${currentPropertyRooms().map(r=>{
+    const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
+    return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
+    <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
+    <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd></dl>
+    ${p.amenities?`<div class="nextline">${esc(p.amenities)}</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn primary edit-room" data-room="${r.id}">Edit profile</button></div>`:''}</article>`
+  }).join('')}</div></section>`;
+}
+function reservedEnd(t){
+  if(t.check_out)return t.check_out;
+  if(t.confirmed_until)return addDays(t.confirmed_until,1);
+  if(t.tenancy_type==='long_term'&&(t.status==='active'||t.status==='upcoming'))return '9999-12-31';
+  return t.check_in||null;
+}
+function stayBlocksDate(t,date){
+  if(!t.check_in)return t.tenancy_type==='long_term'&&t.status==='active'&&!t.check_out&&!t.confirmed_until;
+  const end=reservedEnd(t);
+  return date>=t.check_in&&(!end||date<end);
+}
+function availabilityPage(){
+  const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id))), ts=scopedTenancies().filter(t=>t.room_id===null||roomIds.has(Number(t.room_id)));
+  const start=new Date(today()+'T00:00:00'), end=new Date(start);end.setDate(end.getDate()+89);
+  const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
+  if(state.availabilityMode==='vacancy'){
+    const horizon=end.toISOString().slice(0,10);
+    const cards=rooms.map(r=>{
+      const all=ts.filter(t=>Number(t.room_id)===Number(r.id)&&t.check_in&&tenancyKind(t)!=='historical').sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''));
+      const indefinite=all.find(t=>t.check_in<=today()&&!t.check_out&&!t.confirmed_until);
+      if(indefinite)return '';
+      const stays=all.filter(t=>t.check_out||t.confirmed_until).map(t=>({s:t,start:t.check_in,end:t.check_out||t.confirmed_until})).sort((a,b)=>a.start.localeCompare(b.start));
+      let cursor=today(),slots=[];
+      for(const x of stays){if(x.end<today())continue;if(x.start>cursor)slots.push([cursor,x.start,x.s.check_in_time||null]);if(x.end>=cursor)cursor=x.end}
+      const futureIndef=all.find(t=>t.check_in>today()&&!t.check_out&&!t.confirmed_until);
+      const finalEnd=futureIndef?.check_in||horizon;
+      if(cursor<finalEnd)slots.push([cursor,finalEnd,futureIndef?.check_in_time||null]);
+      return `<div class="vacancy-card"><h3>Room ${r.room_no}${r.ensuite?' · Ensuite':''}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}</div>`;
+    }).join('');
+    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded.</div></div>${switcher}</div>
+      <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
+      <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
+  }
+  const jsDay=start.getDay(), mondayIndex=(jsDay+6)%7;let cells='';
+  for(let i=0;i<mondayIndex;i++)cells+=`<div class="day90 out"></div>`;
+  for(let i=0;i<90;i++){
+    const d=new Date(start);d.setDate(d.getDate()+i);const iso=d.toISOString().slice(0,10),dow=(d.getDay()+6)%7;
+    const active=ts.filter(t=>t.check_in&&t.check_in<=iso&&(!(t.check_out||t.confirmed_until)||(t.check_out||t.confirmed_until)>=iso));
+    const chips=active.map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?`R${roomBy(t.room_id)?.room_no||''}`:(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
+    cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||'<div class="muted small">Available</div>'}</div>`;
+  }
+  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))}</div></div><div>${switcher}<div class="legend" style="margin-top:8px"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
+}
+function paymentsPage(){
+  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.payments.filter(p=>ids.has(p.tenancy_id)).sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
+  const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&nextRentDue(t)).sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
+  return `<section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Rent is due on the first day of each rental period. A payment covering that period clears the overdue flag.</div></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>`<tr><td>${esc(tenantBy(t.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t.room_id))}</td><td>${t.payment_cycle_weeks||'—'} wk</td><td>${fmtDate(nextRentDue(t))}</td><td>${t.rent_period==='week'&&t.payment_cycle_weeks?money(Number(t.rent_amount||0)*Number(t.payment_cycle_weeks)):money(t.rent_amount)}</td><td>${rentState(t)==='overdue'?`<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`:rentState(t)==='due today'?'<span class="danger-text">Due today</span>':esc(rentState(t))}</td></tr>`).join('')}</tbody></table></div></section>
+  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${role()==='owner'?`<button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
+}
+function incomeGroups(payments,mode){
+ const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
+}
+function incomePage(){
+  const ts=scopedTenancies(), ids=new Set(ts.map(t=>Number(t.id)));
+  const pays=state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&String(p.status||'').toLowerCase()==='paid'&&p.received_date);
+  const now=new Date(today()+'T12:00:00'), dow=(now.getDay()+6)%7, w0=new Date(now); w0.setDate(now.getDate()-dow);
+  const w1=new Date(w0); w1.setDate(w0.getDate()+6);
+  const ws=w0.toISOString().slice(0,10), we=w1.toISOString().slice(0,10), ym=today().slice(0,7), yr=today().slice(0,4);
+  const total=pays.reduce((s,p)=>s+Number(p.amount||0),0);
+  const week=pays.filter(p=>p.received_date>=ws&&p.received_date<=we).reduce((s,p)=>s+Number(p.amount||0),0);
+  const month=pays.filter(p=>p.received_date.startsWith(ym)).reduce((s,p)=>s+Number(p.amount||0),0);
+  const year=pays.filter(p=>p.received_date.startsWith(yr)).reduce((s,p)=>s+Number(p.amount||0),0);
+  const elapsed=Math.max(1,(now.getDate()/7)), avg=month/elapsed;
+  const mode=state.incomeMode||'weekly', rows=incomeGroups(pays,mode);
+  return `<div class="income-page-only">
+    <section class="income-hero">
+      <div><div class="eyebrow">PROPERTY PERFORMANCE · V6.5.2</div><h2>Income Dashboard</h2><p>${esc(property()?.name||'Property')} · Rental income received only</p></div>
+    </section>
+    <section class="income-card-grid">
+      <article class="income-card primary"><div class="income-label">General Income from Property</div><div class="income-value">${money(total)}</div><div class="income-note">Total rental income recorded</div></article>
+      <article class="income-card"><div class="income-label">As of This Week</div><div class="income-value">${money(week)}</div><div class="income-note">${fmtDate(ws)} – ${fmtDate(we)}</div></article>
+      <article class="income-card"><div class="income-label">Average Weekly Income</div><div class="income-value">${money(avg)}</div><div class="income-note">Current month to date</div></article>
+      <article class="income-card"><div class="income-label">Monthly Income</div><div class="income-value">${money(month)}</div><div class="income-note">${now.toLocaleString('en-AU',{month:'long',year:'numeric'})}</div></article>
+      <article class="income-card"><div class="income-label">Yearly Income</div><div class="income-value">${money(year)}</div><div class="income-note">${yr}</div></article>
+    </section>
+    <section class="panel income-history">
+      <div class="panel-head"><div><h3>Income History</h3><div class="muted small">Bond, deposit and refundable amounts are excluded.</div></div>
+      <div class="view-switch"><button class="${mode==='weekly'?'active':''}" data-imode="weekly">Weekly</button><button class="${mode==='monthly'?'active':''}" data-imode="monthly">Monthly</button><button class="${mode==='yearly'?'active':''}" data-imode="yearly">Yearly</button></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Period</th><th>Rental Income Received</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.label)}</td><td><b>${money(x.total)}</b></td></tr>`).join('')||'<tr><td colspan="2" class="muted">No rental income recorded.</td></tr>'}</tbody></table></div>
+    </section>
+  </div>`;
+}
+function bondsPage(){
+  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.bonds.filter(b=>ids.has(b.tenancy_id)).sort((a,b)=>b.id-a.id);
+  return `<section class="panel"><div class="panel-head"><h2>Bond & refund register</h2>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Refunded</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc(b.bond_type||'bond')}</td><td><b>${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td><b>${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td>${b.received?'Yes':'No'}</td><td>${b.refunded?'Yes':'No'}</td><td>${esc(b.remaining_description||b.notes||'—')}</td><td>${canEdit()?`<button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No bond records.</div>'}</section>
+  <section class="panel"><div class="panel-head"><h2>Bond action history</h2></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>rows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
+}
+function pricingPage(){
+  const roomIds=new Set(currentPropertyRooms().map(r=>r.id)), rows=state.priceHistory.filter(x=>roomIds.has(x.room_id));
+  return `<section class="panel"><div class="panel-head"><h2>Price history</h2><span class="muted small">Changes made through Room Profiles are logged here.</span></div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Room</th><th>Price type</th><th>Old</th><th>New</th><th>Note</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${new Date(x.created_at).toLocaleString('en-AU')}</td><td>${esc(roomLabel(x.room_id))}</td><td>${esc(x.price_type)}</td><td>${esc(x.old_value||'—')}</td><td>${esc(x.new_value)}</td><td>${esc(x.note||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No price changes logged yet.</div>'}</section>`;
+}
+function staffPage(){
+  if(role()!=='owner')return'<section class="panel"><div class="empty">Only the owner can view Staff Access.</div></section>';
+  const myId=getSession()?.user?.id||'';
+  return `<section class="panel"><div class="panel-head"><div><h2>Staff access</h2><div class="muted small">Owner can invite, resend setup links, change roles, and remove sub-accounts.</div></div><button id="invite-staff" class="btn primary">+ Add / Invite staff</button></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>User ID</th><th>Role</th><th>Actions</th></tr></thead><tbody>
+  ${state.profiles.map(p=>`<tr><td><b>${esc(p.display_name||'Staff')}</b>${p.id===myId?'<div class="muted small">Main Owner / current user</div>':''}</td><td class="mono small">${esc(p.id)}</td><td><select class="role-select" data-user="${esc(p.id)}" ${p.id===myId?'disabled':''}><option ${p.role==='owner'?'selected':''}>owner</option><option ${p.role==='manager'?'selected':''}>manager</option><option ${p.role==='viewer'?'selected':''}>viewer</option></select></td><td><div class="tenant-actions">${p.id!==myId?`<button class="btn ghost resend-staff" data-user="${esc(p.id)}">Resend link</button><button class="btn ghost reset-staff" data-user="${esc(p.id)}">Reset staff access</button><button class="btn danger delete-staff" data-user="${esc(p.id)}">Delete</button>`:'<span class="muted small">Protected</span>'}</div></td></tr>`).join('')}
+  </tbody></table></div>
+  <div class="note" style="margin-top:12px">Resend link sends a fresh setup/recovery email and returns the staff member to the Netlify Rental PM site. Repeated clicks are de-duplicated while a request is in progress. If the email provider temporarily rate-limits delivery, the staff account remains active and is not blocked.</div>
+  </section>`;
+}
+function historyPage(){
+  return `<section class="panel"><div class="panel-head"><h2>Historical tenancies</h2></div>${tenancyTable(scopedTenancies().filter(t=>tenancyKind(t)==='historical'))}</section>
+  <section class="panel"><div class="panel-head"><h2>Recent activity</h2></div>${state.activity.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Action</th><th>Entity</th><th>ID</th></tr></thead><tbody>${state.activity.map(a=>`<tr><td>${new Date(a.created_at).toLocaleString('en-AU')}</td><td>${esc(a.action)}</td><td>${esc(a.entity_type||'')}</td><td>${esc(a.entity_id||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No activity recorded.</div>'}</section>`;
+}
+function render(){
+  let html='';
+  switch(state.page){
+    case 'income': html=incomePage(); break;
+    case 'payments': html=paymentsPage(); break;
+    case 'bonds': html=bondsPage(); break;
+    case 'tenants': html=tenantsPage(); break;
+    case 'rooms': html=roomsPage(); break;
+    case 'availability': html=availabilityPage(); break;
+    case 'pricing': html=pricingPage(); break;
+    case 'staff': html=staffPage(); break;
+    case 'history': html=historyPage(); break;
+    case 'overview':
+    default: html=overviewPage(); break;
+  }
+  $('#content').innerHTML=html;
+  $$('.seg [data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render()});
+  $$('.edit-room').forEach(b=>b.onclick=()=>openRoom(Number(b.dataset.room)));
+  $$('.edit-tenant').forEach(b=>b.onclick=()=>openTenant(Number(b.dataset.tenant)));
+  $$('.edit-tenancy').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
+  const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
+  const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
+  $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));
+  $$('[data-amode]').forEach(b=>b.onclick=()=>{state.availabilityMode=b.dataset.amode;render()});
+  const finder=$('#find-room');if(finder)finder.onclick=()=>{
+    const a=$('#find-in').value,b=$('#find-out').value,res=$('#find-result');if(!a||!b||b<=a){res.innerHTML='<div class="error">Choose a valid check-in and check-out time.</div>';return}
+    const available=currentPropertyRooms().filter(r=>!scopedTenancies().some(t=>{
+      if(Number(t.room_id)!==Number(r.id)||!t.check_in)return false;
+      const s=t.check_in+'T'+(t.check_in_time||'00:00'),e=(t.check_out||t.confirmed_until||'9999-12-31')+'T'+(t.check_out_time||'23:59');
+      return a<e&&b>s;
+    }));
+    res.innerHTML=available.length?`<div class="note"><b>Available:</b> ${available.map(r=>`Room ${r.room_no}${r.ensuite?' (Ensuite)':''}`).join(' · ')}</div>`:'<div class="error">No room is fully available for that period.</div>';
+  };
+  $$('.delete-payment').forEach(b=>b.onclick=()=>deletePayment(Number(b.dataset.payment)));
+  $$('.delete-bond').forEach(b=>b.onclick=()=>deleteBond(Number(b.dataset.bond)));
+  const tsrch=$('#tenant-search');if(tsrch)tsrch.oninput=e=>{
+    state.tenantSearch=e.target.value;
+    const q=state.tenantSearch.trim().toLowerCase();
+    $$('#content table tbody tr[data-tenant-search]').forEach(tr=>{
+      tr.style.display=!q||tr.dataset.tenantSearch.includes(q)?'':'none';
+    });
+  };
+  $$('[data-tfilter]').forEach(b=>b.onclick=()=>{state.tenantFilter=b.dataset.tfilter;render()});
+  $$('[data-imode]').forEach(b=>b.onclick=()=>{state.incomeMode=b.dataset.imode;render()});
+  const inv=$('#invite-staff');if(inv)inv.onclick=()=>{document.querySelector('#invite-form').reset();$('#invite-note').classList.add('hidden');$('#invite-error').classList.add('hidden');$('#invite-dialog').showModal()};
+  $$('.delete-staff').forEach(b=>b.onclick=()=>deleteStaff(b.dataset.user));
+  $$('.resend-staff').forEach(b=>b.onclick=()=>resendStaffLink(b));
+  $$('.reset-staff').forEach(b=>b.onclick=()=>resetStaffAccess(b));
+  $$('.role-select').forEach(s=>s.onchange=()=>changeRole(s.dataset.user,s.value));
+}
+
+function tenancyOptions(){
+  return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
+}
+function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">Room ${r.room_no}${r.ensuite?' · Ensuite':''}</option>`).join('');$('#stay-dialog').showModal()}
+function openPayment(){const f=$('#payment-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#payment-dialog').showModal()}
+function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
+async function deletePayment(id){
+  if(role()!=='owner')return;
+  const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount)}? This cannot be undone.`))return;
+  try{await insert('activity_log',{actor_user_id:getSession()?.user?.id||null,action:'delete_payment',entity_type:'payment',entity_id:String(id),details:{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date}});await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});toast('Payment deleted');await loadAll()}catch(e){alert(e.message)}
+}
+async function deleteBond(id){
+  if(role()!=='owner'){alert('Owner permission is required to delete bond / deposit history.');return}
+  const b=state.bonds.find(x=>Number(x.id)===Number(id));
+  if(!b)return;
+  if(!confirm(`Delete this ${b.bond_type||'bond / deposit'} record (${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')}) and its related history? This cannot be undone.`))return;
+  try{
+    // Child records must be removed first because they reference bonds.id.
+    await api('bond_refund_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
+    await api('bond_payment_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
+    await api('bonds',`id=eq.${id}`,{method:'DELETE'});
+    state.bondRefundEvents=state.bondRefundEvents.filter(x=>Number(x.bond_id)!==Number(id));
+    state.bondEvents=state.bondEvents.filter(x=>Number(x.bond_id)!==Number(id));
+    state.bonds=state.bonds.filter(x=>Number(x.id)!==Number(id));
+    toast('Bond / deposit history deleted');
+    await loadAll();
+    // Audit is best-effort and uses the real database column user_id.
+    const uid=getSession()?.user?.id||null;
+    insert('activity_log',{user_id:uid,action:'delete_bond',entity_type:'bond',entity_id:Number(id),details:{amount:b.amount,tenancy_id:b.tenancy_id,type:b.bond_type}}).catch(()=>{});
+  }catch(e){
+    alert('Could not delete this bond / deposit history: '+e.message);
+  }
+}
+function openTenant(id){
+  const t=tenantBy(id),f=$('#tenant-form');if(!t)return;
+  f.reset();f.elements.id.value=t.id;f.elements.name.value=t.name||'';f.elements.gender.value=t.gender||'';f.elements.contact_method.value=t.contact_method||'';f.elements.notes.value=t.notes||'';
+  $('#tenant-dialog').showModal();
+}
+function openTenancy(id){
+  const t=state.tenancies.find(x=>Number(x.id)===Number(id)),f=$('#tenancy-form');if(!t)return;
+  f.reset();f.elements.id.value=t.id;$('#tenancy-dialog-name').textContent=`${tenantBy(t.tenant_id)?.name||'Tenant'} · ${roomLabel(t.room_id)}`;
+  f.elements.room_id.innerHTML='<option value="">Unassigned / Living Room</option>'+currentPropertyRooms().map(r=>`<option value="${r.id}">Room ${r.room_no}${r.ensuite?' · Ensuite':''}</option>`).join('');
+  ['room_id','status','check_in','check_in_time','confirmed_until','check_out','check_out_time','rent_amount','rent_period','payment_cycle_weeks','people_count','sleeping_location','notes'].forEach(k=>{if(f.elements[k])f.elements[k].value=t[k]??''});
+  const noOut=!t.check_out&&!t.confirmed_until;f.elements.no_checkout.checked=noOut;f.elements.check_out.disabled=noOut;f.elements.check_out_time.disabled=noOut;f.elements.confirmed_until.disabled=noOut;
+  $('#tenancy-dialog').showModal();
+}
+function openBondAction(id){
+  const b=state.bonds.find(x=>Number(x.id)===Number(id));if(!b)return;
+  const f=$('#bond-action-form');f.reset();f.elements.bond_id.value=b.id;$('#bond-action-name').textContent=`Bond #${b.id} · remaining ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`;
+  $('#bond-action-dialog').showModal();
+}
+function openRoom(id){
+  const r=roomBy(id),p=state.roomProfiles.find(x=>Number(x.room_id)===Number(id))||{},f=$('#room-form');f.reset();f.elements.room_id.value=id;$('#room-dialog-name').textContent=roomLabel(id);
+  ['room_type','capacity','bathroom_type','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','short_stay_unit','extra_bed_fee','amenities','pricing_note'].forEach(k=>{if(f.elements[k])f.elements[k].value=p[k]??''});
+  $('#room-dialog').showModal()
+}
+
+async function deleteStaff(userId){
+  if(role()!=='owner')return;
+  const p=state.profiles.find(x=>x.id===userId);if(!p)return;
+  if(userId===getSession()?.user?.id){alert('Your Main Owner account is protected and cannot be deleted here.');return}
+  if(!confirm(`Delete staff access for ${p.display_name||'this user'}? They will lose Rental PM access.`))return;
+  try{
+    const s=getSession();
+    const r=await fetch(`${SB_URL}/functions/v1/rental-delete-staff`,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:`Bearer ${s?.access_token||''}`},body:JSON.stringify({user_id:userId})});
+    const body=await r.json();if(!r.ok)throw new Error(body.error||`Delete failed (${r.status})`);
+    toast('Staff access deleted');await loadAll();
+  }catch(e){alert(e.message)}
+}
+let resendBusy={};
+async function resetStaffAccess(button){
+  if(role()!=='owner')return;
+  const userId=button.dataset.user,p=state.profiles.find(x=>x.id===userId);if(!p)return;
+  if(!confirm(`Reset sign-in access for ${p.display_name||'this staff member'}? A fresh password setup email will be requested. Their staff record will not be deleted.`))return;
+  await resendStaffLink(button);
+}
+async function resendStaffLink(button){
+  if(role()!=='owner')return;
+  const userId=button.dataset.user;if(resendBusy[userId])return;
+  const p=state.profiles.find(x=>x.id===userId);if(!p)return;
+  if(!confirm(`Send a fresh setup link to ${p.display_name||'this staff member'}?`))return;
+  resendBusy[userId]=true;const old=button.textContent;button.disabled=true;button.textContent='Sending…';
+  try{
+    const s=getSession();
+    const r=await fetch(`${SB_URL}/functions/v1/rental-resend-staff-link`,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:`Bearer ${s?.access_token||''}`},body:JSON.stringify({user_id:userId})});
+    const body=await r.json();if(!r.ok)throw new Error(body.error||`Resend failed (${r.status})`);
+    toast('Fresh setup link sent');
+    button.textContent='Sent ✓';
+    setTimeout(()=>{button.disabled=false;button.textContent='Resend link';resendBusy[userId]=false},2500);
+    return;
+  }catch(e){
+    const msg=String(e.message||e);
+    if(/rate|limit|too many|429/i.test(msg)){
+      alert('The email provider is temporarily limiting repeated setup emails. The staff account is NOT blocked. Please use the most recent email already received, or try Resend link again later.');
+    }else alert(msg);
+    resendBusy[userId]=false;button.disabled=false;button.textContent=old
+  }
+}
+async function changeRole(user,value){
+  if(user===getSession()?.user?.id && value!=='owner' && role()==='owner'){if(!confirm('This would remove your own owner role. Continue?')){render();return}}
+  try{await patch('profiles',`id=eq.${encodeURIComponent(user)}`,{role:value});toast('Staff role updated');await loadAll()}catch(e){alert(e.message);await loadAll()}
+}
+
+
+$('#nav').onclick=e=>{
+  const b=e.target.closest('[data-page]');if(!b)return;
+  e.preventDefault();e.stopPropagation();
+  setPage(b.dataset.page);
+};
+$('#new-stay').onclick=openStay;$('#refresh').onclick=()=>loadAll().catch(e=>alert(e.message));$('#logout').onclick=()=>{clearSession();location.reload()};
+$$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());
+
+$('#stay-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#stay-error');err.classList.add('hidden');
+  try{
+    const tr=await insert('tenants',{name:fd.get('name'),contact_method:fd.get('contact_method')||null,notes:'Created in Rental PM V6'});const tenant=tr?.[0];if(!tenant?.id)throw new Error('Tenant ID was not returned.');
+    const ci=fd.get('check_in')||null;await insert('tenancies',{room_id:Number(fd.get('room_id')),tenant_id:tenant.id,tenancy_type:fd.get('tenancy_type'),check_in:ci,check_in_time:fd.get('check_in_time')||null,confirmed_until:fd.get('confirmed_until')||null,rent_amount:fd.get('rent_amount')?Number(fd.get('rent_amount')):null,rent_period:fd.get('rent_period'),payment_cycle_weeks:fd.get('payment_cycle_weeks')?Number(fd.get('payment_cycle_weeks')):null,people_count:Number(fd.get('people_count')||1),bills_included:fd.get('bills_included')==='true',status:ci&&ci>today()?'upcoming':'active',notes:fd.get('notes')||null});
+    f.reset();$('#stay-dialog').close();toast('New stay saved');await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#payment-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#payment-error');err.classList.add('hidden');
+  try{await insert('rent_payments',{tenancy_id:Number(fd.get('tenancy_id')),amount:Number(fd.get('amount')),period_start:fd.get('period_start')||null,period_end:fd.get('period_end')||null,received_date:fd.get('received_date')||today(),status:'paid',payment_method:fd.get('payment_method')||null,notes:fd.get('notes')||null,recorded_by:getSession()?.user?.id||null});f.reset();$('#payment-dialog').close();toast('Payment recorded');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#bond-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-error');err.classList.add('hidden');
+  try{await insert('bonds',{tenancy_id:Number(fd.get('tenancy_id')),amount:Number(fd.get('amount')),currency:fd.get('original_currency'),original_currency:fd.get('original_currency'),received:true,received_date:fd.get('received_date')||today(),refunded:false,bond_type:fd.get('bond_type'),received_via:fd.get('received_via')||null,notes:fd.get('notes')||null});f.reset();$('#bond-dialog').close();toast('Bond saved');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#room-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),id=Number(fd.get('room_id')),err=$('#room-error');err.classList.add('hidden');
+  const old=state.roomProfiles.find(x=>Number(x.room_id)===id)||{};
+  const numeric=['capacity','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','extra_bed_fee'];
+  const row={};for(const [k,v] of fd.entries()){if(k==='room_id')continue;row[k]=numeric.includes(k)?(v===''?null:Number(v)):(v||null)}row.updated_at=new Date().toISOString();
+  try{
+    await patch('room_profiles',`room_id=eq.${id}`,row);
+    for(const k of ['standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max']){
+      if(String(old[k]??'')!==String(row[k]??''))await insert('room_price_history',{room_id:id,price_type:k,old_value:String(old[k]??''),new_value:String(row[k]??''),changed_by:getSession()?.user?.id||null,note:row.pricing_note||null});
+    }
+    $('#room-dialog').close();toast('Room profile updated');await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+
+
+$('#tenant-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#tenant-error');err.classList.add('hidden');
+  try{await patch('tenants',`id=eq.${Number(fd.get('id'))}`,{name:fd.get('name'),gender:fd.get('gender')||null,contact_method:fd.get('contact_method')||null,notes:fd.get('notes')||null});$('#tenant-dialog').close();toast('Tenant updated');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#tenancy-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#tenancy-error');err.classList.add('hidden');
+  const noCheckout=f.elements.no_checkout.checked;
+  const row={room_id:fd.get('room_id')?Number(fd.get('room_id')):null,status:fd.get('status'),check_in:fd.get('check_in')||null,check_in_time:fd.get('check_in_time')||null,confirmed_until:noCheckout?null:(fd.get('confirmed_until')||null),check_out:noCheckout?null:(fd.get('check_out')||null),check_out_time:noCheckout?null:(fd.get('check_out_time')||null),rent_amount:fd.get('rent_amount')?Number(fd.get('rent_amount')):null,rent_period:fd.get('rent_period')||null,payment_cycle_weeks:fd.get('payment_cycle_weeks')?Number(fd.get('payment_cycle_weeks')):null,people_count:fd.get('people_count')?Number(fd.get('people_count')):1,sleeping_location:fd.get('sleeping_location')||null,notes:fd.get('notes')||null};
+  try{await patch('tenancies',`id=eq.${Number(fd.get('id'))}`,row);$('#tenancy-dialog').close();toast('Tenancy updated');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#no-checkout').onchange=e=>{const f=$('#tenancy-form'),on=e.target.checked;['confirmed_until','check_out','check_out_time'].forEach(k=>{f.elements[k].disabled=on;if(on)f.elements[k].value=''})};
+$('#end-tenancy').onclick=async()=>{
+  const f=$('#tenancy-form'),id=Number(f.elements.id.value);if(!id)return;
+  if(!confirm('End this tenancy today?'))return;
+  try{await patch('tenancies',`id=eq.${id}`,{status:'historical',check_out:f.elements.check_out.value||today()});$('#tenancy-dialog').close();toast('Tenancy ended');await loadAll()}catch(e){alert(e.message)}
+};
+$('#bond-action-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-action-error');err.classList.add('hidden');
+  const id=Number(fd.get('bond_id')),b=state.bonds.find(x=>x.id===id),action=fd.get('action'),amount=Number(fd.get('amount')||0);
+  try{
+    await insert('bond_refund_events',{bond_id:id,action,amount:amount||null,currency:b?.original_currency||b?.currency||'AUD',method:fd.get('method')||null,reference:fd.get('reference')||null,notes:fd.get('notes')||null,created_by:getSession()?.user?.id||null});
+    const current=bondRemaining(b)??Number(b?.amount||0);let remaining=current,patchRow={};
+    if(action==='partial_refund'){remaining=Math.max(0,current-amount);patchRow={refund_amount:Number(b?.refund_amount||0)+amount,remaining_amount:remaining,remaining_description:`Remaining after partial refund: ${remaining}`}}
+    if(action==='full_refund'){remaining=0;patchRow={refunded:true,refunded_date:today(),refund_amount:Number(b?.refund_amount||0)+amount,refund_method:fd.get('method')||null,refund_reference:fd.get('reference')||null,remaining_amount:0,remaining_description:'Fully refunded'}}
+    if(action==='deduction'){remaining=Math.max(0,current-amount);patchRow={deduction_amount:Number(b?.deduction_amount||0)+amount,deduction_reason:fd.get('notes')||null,remaining_amount:remaining,remaining_description:`Remaining after deduction: ${remaining}`}}
+    if(Object.keys(patchRow).length)await patch('bonds',`id=eq.${id}`,patchRow);
+    $('#bond-action-dialog').close();toast('Bond action recorded');await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#invite-form').onsubmit=async e=>{
+  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#invite-error'),note=$('#invite-note');err.classList.add('hidden');note.classList.add('hidden');
+  try{
+    const s=getSession();const r=await fetch(`${SB_URL}/functions/v1/rental-invite-staff`,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:`Bearer ${s?.access_token||''}`},body:JSON.stringify({email:fd.get('email'),display_name:fd.get('display_name'),role:fd.get('role'),redirect_to:CANONICAL_URL})});
+    const body=await r.json();if(!r.ok)throw new Error(body.error||`Invite failed (${r.status})`);
+    note.textContent='Invite sent. The staff member can use the email link to set their password.';note.classList.remove('hidden');f.reset();await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+
+let loginLock=false;
+$('#signin').onclick=async()=>{
+  if(loginLock)return;const email=$('#email').value.trim(),pw=$('#password').value,btn=$('#signin');$('#auth-err').classList.add('hidden');$('#auth-msg').classList.add('hidden');
+  if(!email||!pw){showAuth('','Enter email and password.');return}
+  loginLock=true;btn.disabled=true;btn.textContent='Signing in…';
+  try{await signIn(email,pw);showApp();await loadAll()}catch(e){showAuth('',e.message)}finally{loginLock=false;btn.disabled=false;btn.textContent='Sign in'}
+};
+$('#password').addEventListener('keydown',e=>{if(e.key==='Enter')$('#signin').click()});
+let forgotLock=false;
+$('#forgot').onclick=async()=>{
+  const email=$('#email').value.trim();if(!email){showAuth('','Enter your email first, then choose Forgot password.');return}
+  if(forgotLock)return;forgotLock=true;const b=$('#forgot');b.disabled=true;b.textContent='Sending…';
+  try{await raw('/auth/v1/recover',{method:'POST',body:JSON.stringify({email,redirect_to:CANONICAL_URL})},false);showAuth('Password reset email requested. Open the newest reset email once; do not keep requesting more.','')}catch(e){showAuth('',e.message)}finally{forgotLock=false;b.disabled=false;b.textContent='Forgot password?'}
+};
+function parseRecovery(){
+  const h=new URLSearchParams(location.hash.replace(/^#/,''));
+  const q=new URLSearchParams(location.search);
+  const access=h.get('access_token')||q.get('access_token'),refresh=h.get('refresh_token')||q.get('refresh_token');
+  const type=h.get('type')||q.get('type')||'',err=h.get('error_description')||q.get('error_description');
+  const setup=type==='invite'||type==='recovery'||type==='signup'||!!access||!!err;
+  if(!setup)return false;
+  $('#boot').classList.add('hidden');$('#auth').classList.remove('hidden');$('#signin-box').classList.add('hidden');
+  if(err){
+    $('#reset-box').classList.remove('hidden');$('#setup-title').textContent='Setup link unavailable';
+    $('#reset-msg').textContent='This link is invalid or expired. Ask the owner to use Resend link, then open only the newest email.';$('#reset-msg').classList.remove('hidden');
+    $('#newpw').closest('.auth-grid').classList.add('hidden');$('#setpw').classList.add('hidden');history.replaceState({},'',location.pathname);return true;
+  }
+  if(access){
+    saveSession({access_token:access,refresh_token:refresh||''});
+    $('#reset-box').classList.remove('hidden');
+    const invite=type==='invite'||type==='signup';
+    $('#auth-title').textContent=invite?'Welcome to Rental PM':'Rental PM account recovery';
+    $('#auth-sub').textContent=invite?'You’ve been granted staff access. Create your work password to activate your account.':'Create a new work password to continue.';
+    $('#setup-title').textContent=invite?'Create Work Password':'Set New Work Password';
+    $('#setpw').textContent=invite?'Activate Account':'Save New Password';
+    history.replaceState({},'',location.pathname);return true;
+  }
+  return false;
+}
+$('#setpw').onclick=async()=>{
+  const p1=$('#newpw').value,p2=$('#newpw2').value,b=$('#setpw');$('#reset-err').classList.add('hidden');$('#reset-msg').classList.add('hidden');
+  if(p1.length<8){$('#reset-err').textContent='Use at least 8 characters.';$('#reset-err').classList.remove('hidden');return}
+  if(p1!==p2){$('#reset-err').textContent='Passwords do not match.';$('#reset-err').classList.remove('hidden');return}
+  b.disabled=true;b.textContent='Saving…';
+  try{await raw('/auth/v1/user',{method:'PUT',body:JSON.stringify({password:p1})},true);$('#auth').classList.add('hidden');showApp();await loadAll();toast('Account activated — welcome to Rental PM')}catch(e){$('#reset-err').textContent=e.message;$('#reset-err').classList.remove('hidden')}finally{b.disabled=false;if(!$('#auth').classList.contains('hidden'))b.textContent='Save password'}
+};
+
+async function start(){
+  if(parseRecovery())return;
+  const s=getSession();if(!s?.access_token){showAuth();return}
+  try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){if(/token|jwt|session|signed in|refresh/i.test(e.message)){clearSession();showAuth('Your previous session expired. Please sign in again.','')}else fatal(e.message)}
+}
+start();
+</script>
+</body></html>

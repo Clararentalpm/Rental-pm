@@ -212,6 +212,25 @@ Do not silently overwrite another booking.
 
 ---
 
+## 7b. Room viewings / 看房 (owner-requested 2026-09-08)
+
+Prospective tenants often need a viewing before they become tenants. Left nav **Viewings** (scoped by property tab) supports:
+
+- Book **inspection date and time** (to the minute)
+- Which **property + room**
+- **Intended stay** (check-in / check-out / short vs long) — checked live against tenancy Availability; warn on conflict
+- How many people are coming
+- Whether they need **加床 / extra bed**
+- Whether they later paid a **deposit to secure the room** (amount + AUD/CNY)
+- Free-text **notes**
+- Lists: **Past / Current / Upcoming** (plus All)
+
+Tied to Availability: calendar chips for booked viewings; Vacancy cards can open Book viewing for that room.
+
+One-time DB setup: run `supabase_room_viewings.sql` in Supabase SQL Editor.
+
+---
+
 ## 8. Payments
 
 Payment management should support:

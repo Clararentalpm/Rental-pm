@@ -194,9 +194,11 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <label>Peak min<input name="peak_price_min" type="number" step="0.01"></label><label>Peak max<input name="peak_price_max" type="number" step="0.01"></label>
     <label>Off-peak min<input name="off_peak_min" type="number" step="0.01"></label><label>Off-peak max<input name="off_peak_max" type="number" step="0.01"></label>
     <label>Short stay min<input name="short_stay_min" type="number" step="0.01"></label><label>Short stay max<input name="short_stay_max" type="number" step="0.01"></label>
-    <label>Short stay unit<input name="short_stay_unit" placeholder="night / day"></label><label>Extra sofa fee ($/day)<input name="extra_bed_fee" type="number" step="0.01" placeholder="e.g. 25"></label>
+    <label>Short stay unit<input name="short_stay_unit" placeholder="night / day"></label>
+    <label>Extra room fee ($/day)<input name="extra_room_fee" type="number" step="0.01" placeholder="e.g. 25"></label>
+    <label>加床 / Extra bed fee ($)<input name="extra_bed_fee" type="number" step="0.01" placeholder="e.g. 50"></label>
   </div>
-  <label style="margin-top:12px">Amenities<textarea name="amenities" rows="2" placeholder="e.g. Extra sofa / sofa guest available"></textarea></label>
+  <label style="margin-top:12px">Amenities<textarea name="amenities" rows="2" placeholder="e.g. Extra room / sofa guest available as extra room"></textarea></label>
   <label style="margin-top:12px">Pricing note<textarea name="pricing_note" rows="2"></textarea></label>
   <div id="room-error" class="error hidden"></div>
   <div class="dialog-actions"><button type="button" class="btn ghost" data-close="room-dialog">Cancel</button><button class="btn primary">Save room profile</button></div>
@@ -540,16 +542,31 @@ function tenantsPage(){
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
   ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
 }
+function getExtraRoomFee(p){
+  const m=String(p?.pricing_note||'').match(/(?:^|\n)EXTRA_ROOM_FEE:([0-9.]+)(?:\n|$)/);
+  return m?m[1]:'';
+}
+function displayPricingNote(p){
+  return String(p?.pricing_note||'').replace(/(?:^|\n)EXTRA_ROOM_FEE:[0-9.]+/g,'').replace(/^\n+|\n+$/g,'').trim();
+}
+function withExtraRoomFee(note,fee){
+  const base=String(note||'').replace(/(?:^|\n)EXTRA_ROOM_FEE:[0-9.]+/g,'').replace(/^\n+|\n+$/g,'').trim();
+  if(fee===null||fee===undefined||fee==='')return base||null;
+  return (base?base+'\n':'')+`EXTRA_ROOM_FEE:${Number(fee)}`;
+}
 function roomsPage(){
-  return `<section class="panel"><div class="panel-head"><div><h2>Room profiles</h2><div class="muted small">Pricing, capacity and amenities. Extra sofa / sofa-guest rate is shown per room.</div></div></div>
-  <div class="note" style="margin-bottom:14px"><b>Extra sofa:</b> use Extra sofa fee ($/day) on each room profile (McGregor sofa guest rate is typically <b>$25/day</b>).</div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Room profiles</h2><div class="muted small">Pricing, capacity and amenities. Extra room (incl. sofa guest as extra room) and 加床 are shown per room.</div></div></div>
+  <div class="note" style="margin-bottom:14px"><b>Extra room</b> = sofa / living-area guest treated as an extra room (McGregor typically <b>$25/day</b>). <b>加床</b> = extra bed in the room (typically <b>$50</b>).</div>
   <div class="room-grid">${currentPropertyRooms().map(r=>{
     const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
+    const extraRoom=getExtraRoomFee(p);
+    const note=displayPricingNote(p);
     return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
     <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
     <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd>
-    <dt>Extra sofa</dt><dd>${p.extra_bed_fee!==null&&p.extra_bed_fee!==undefined&&p.extra_bed_fee!==''?`${money(p.extra_bed_fee)} / day`:'—'}</dd></dl>
-    ${p.amenities?`<div class="nextline">${esc(p.amenities)}</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn primary edit-room" data-room="${r.id}">Edit profile</button></div>`:''}</article>`
+    <dt>Extra room</dt><dd>${extraRoom!==''?`${money(extraRoom)} / day`:'—'}</dd>
+    <dt>加床</dt><dd>${p.extra_bed_fee!==null&&p.extra_bed_fee!==undefined&&p.extra_bed_fee!==''?money(p.extra_bed_fee):'—'}</dd></dl>
+    ${p.amenities?`<div class="nextline">${esc(p.amenities)}</div>`:''}${note?`<div class="muted small" style="margin-top:8px">${esc(note)}</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn primary edit-room" data-room="${r.id}">Edit profile</button></div>`:''}</article>`
   }).join('')}</div></section>`;
 }
 function reservedEnd(t){
@@ -790,7 +807,12 @@ async function setBondRefundedStatus(id,refunded){
 }
 function openRoom(id){
   const r=roomBy(id),p=state.roomProfiles.find(x=>Number(x.room_id)===Number(id))||{},f=$('#room-form');f.reset();f.elements.room_id.value=id;$('#room-dialog-name').textContent=roomLabel(id);
-  ['room_type','capacity','bathroom_type','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','short_stay_unit','extra_bed_fee','amenities','pricing_note'].forEach(k=>{if(f.elements[k])f.elements[k].value=p[k]??''});
+  ['room_type','capacity','bathroom_type','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','short_stay_unit','extra_bed_fee','amenities'].forEach(k=>{if(f.elements[k])f.elements[k].value=p[k]??''});
+  if(f.elements.extra_room_fee)f.elements.extra_room_fee.value=getExtraRoomFee(p);
+  if(f.elements.pricing_note)f.elements.pricing_note.value=displayPricingNote(p);
+  // Sensible defaults when empty (owner can change before save)
+  if(f.elements.extra_bed_fee&&(f.elements.extra_bed_fee.value===''||f.elements.extra_bed_fee.value===null))f.elements.extra_bed_fee.placeholder='50';
+  if(f.elements.extra_room_fee&&(f.elements.extra_room_fee.value===''||f.elements.extra_room_fee.value===null))f.elements.extra_room_fee.placeholder='25';
   $('#room-dialog').showModal()
 }
 
@@ -869,12 +891,16 @@ $('#room-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),id=Number(fd.get('room_id')),err=$('#room-error');err.classList.add('hidden');
   const old=state.roomProfiles.find(x=>Number(x.room_id)===id)||{};
   const numeric=['capacity','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','extra_bed_fee'];
-  const row={};for(const [k,v] of fd.entries()){if(k==='room_id')continue;row[k]=numeric.includes(k)?(v===''?null:Number(v)):(v||null)}row.updated_at=new Date().toISOString();
+  const row={};for(const [k,v] of fd.entries()){if(k==='room_id'||k==='extra_room_fee')continue;row[k]=numeric.includes(k)?(v===''?null:Number(v)):(v||null)}
+  row.pricing_note=withExtraRoomFee(fd.get('pricing_note')||'',fd.get('extra_room_fee'));
+  row.updated_at=new Date().toISOString();
   try{
     await patch('room_profiles',`room_id=eq.${id}`,row);
-    for(const k of ['standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max']){
-      if(String(old[k]??'')!==String(row[k]??''))await insert('room_price_history',{room_id:id,price_type:k,old_value:String(old[k]??''),new_value:String(row[k]??''),changed_by:getSession()?.user?.id||null,note:row.pricing_note||null});
+    for(const k of ['standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','extra_bed_fee']){
+      if(String(old[k]??'')!==String(row[k]??''))await insert('room_price_history',{room_id:id,price_type:k==='extra_bed_fee'?'extra_bed_fee_加床':k,old_value:String(old[k]??''),new_value:String(row[k]??''),changed_by:getSession()?.user?.id||null,note:row.pricing_note||null});
     }
+    const oldExtra=getExtraRoomFee(old),newExtra=fd.get('extra_room_fee')||'';
+    if(String(oldExtra)!==String(newExtra))await insert('room_price_history',{room_id:id,price_type:'extra_room_fee',old_value:String(oldExtra||''),new_value:String(newExtra||''),changed_by:getSession()?.user?.id||null,note:'Extra room fee (sofa guest treated as extra room)'});
     $('#room-dialog').close();toast('Room profile updated');await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };

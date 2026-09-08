@@ -1,5 +1,10 @@
 # Changelog
 
+## Extra room + 加床 fees — 2026-09-08
+- Reframed former “Extra sofa” as **Extra room** (sofa guest treated as extra room; typically $25/day).
+- Added per-room **加床 / Extra bed** fee (typically $50), stored in existing `extra_bed_fee`.
+- Extra room fee stored via `pricing_note` marker `EXTRA_ROOM_FEE:` (no DB schema change).
+
 ## Bond status buttons + Extra sofa fee — 2026-09-08
 - Bond register: added **Mark refunded** / **Mark not refunded** buttons (plus matching actions in Refund/deduct dialog).
 - Room Profiles: relabelled Extra bed fee → **Extra sofa fee ($/day)** and show Extra sofa on each room card.

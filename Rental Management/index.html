@@ -165,7 +165,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
-  <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
+  <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle. WeChat defaults to RMB (CNY); Cash / EFT default to AUD.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
   <input type="hidden" name="id" value="">
   <div class="form-grid" style="margin-top:14px">
     <label>Tenancy<select name="tenancy_id" required></select></label>
@@ -173,7 +173,15 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <label>Period start<input name="period_start" type="date"></label>
     <label>Period end<input name="period_end" type="date"></label>
     <label>Received date<input name="received_date" type="date"></label>
-    <label>Payment method<input name="payment_method" placeholder="Cash / Transfer"></label>
+    <label>Payment method<select name="payment_method" required>
+      <option value="Cash">Cash</option>
+      <option value="EFT">EFT</option>
+      <option value="WeChat">WeChat</option>
+    </select></label>
+    <label>Currency<select name="currency">
+      <option value="AUD">AUD</option>
+      <option value="CNY">CNY (RMB)</option>
+    </select></label>
   </div>
   <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
   <div id="payment-error" class="error hidden"></div>
@@ -695,6 +703,45 @@ function withExtraRoomFee(note,fee){
   if(fee===null||fee===undefined||fee==='')return base||null;
   return (base?base+'\n':'')+`EXTRA_ROOM_FEE:${Number(fee)}`;
 }
+/** Rent payment currency: WeChat → CNY (RMB); Cash / EFT → AUD (owner rule). Stored via notes marker (no currency column on rent_payments). */
+function defaultCurrencyForMethod(method){
+  const m=String(method||'').toLowerCase();
+  if(m.includes('wechat')||m.includes('微信')||m==='wx')return 'CNY';
+  return 'AUD';
+}
+function normalizePaymentMethod(raw){
+  const m=String(raw||'').trim().toLowerCase();
+  if(!m)return 'Cash';
+  if(m==='cash'||m.includes('cash'))return 'Cash';
+  if(m==='eft'||m.includes('eft')||m.includes('transfer')||m.includes('bank'))return 'EFT';
+  if(m.includes('wechat')||m.includes('微信')||m==='wx')return 'WeChat';
+  if(['cash','eft','wechat'].includes(m))return m[0].toUpperCase()+m.slice(1);
+  return 'Cash';
+}
+function paymentCurrency(p){
+  const m=String(p?.notes||'').match(/(?:^|\n)PAYMENT_CURRENCY:(AUD|CNY)(?:\n|$)/i);
+  if(m)return m[1].toUpperCase();
+  return defaultCurrencyForMethod(p?.payment_method);
+}
+function withPaymentCurrency(note,currency){
+  const base=String(note||'').replace(/(?:^|\n)PAYMENT_CURRENCY:(AUD|CNY)/gi,'').replace(/^\n+|\n+$/g,'').trim();
+  const cur=(currency==='CNY'?'CNY':'AUD');
+  return (base?base+'\n':'')+`PAYMENT_CURRENCY:${cur}`;
+}
+function displayPaymentNotes(p){
+  return String(p?.notes||'').replace(/(?:^|\n)PAYMENT_CURRENCY:(AUD|CNY)/gi,'').replace(/^\n+|\n+$/g,'').trim();
+}
+function syncPaymentCurrencyFromMethod(f,{force=false}={}){
+  if(!f?.elements?.currency||!f.elements.payment_method)return;
+  const next=defaultCurrencyForMethod(f.elements.payment_method.value);
+  if(force||!f.elements.currency.dataset.touched)f.elements.currency.value=next;
+}
+function bindPaymentMethodCurrency(f){
+  if(!f?.elements?.payment_method||!f.elements.currency)return;
+  delete f.elements.currency.dataset.touched;
+  f.elements.payment_method.onchange=()=>{delete f.elements.currency.dataset.touched;syncPaymentCurrencyFromMethod(f,{force:true})};
+  f.elements.currency.onchange=()=>{f.elements.currency.dataset.touched='1'};
+}
 function roomsPage(){
   const mcg=isMcGregorProperty(), needSofa=mcg&&!propertyHasSofa()&&canEdit();
   const sofaCta=needSofa?`<div class="note" style="margin-bottom:14px"><b>McGregor:</b> 5 rooms + Sofa. Sofa unit is missing — click to add the 6th profile (Extra room, typically $25/day). <button type="button" class="btn primary" id="add-sofa-room" style="margin-left:8px">+ Add Sofa unit</button></div>`:'';
@@ -795,7 +842,7 @@ function paymentsPage(){
     const members=scheduleGroupMembers(t);
     return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
   }).join('')||'<tr><td colspan="6" class="muted">No active rent schedule rows.</td></tr>'}</tbody></table></div></section>
-  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
+  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotes(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
  const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
@@ -926,6 +973,9 @@ function openPayment(tenancyId){
   f.elements.tenancy_id.innerHTML=tenancyOptions();
   if(tenancyId)f.elements.tenancy_id.value=String(tenancyId);
   f.elements.received_date.value=today();
+  f.elements.payment_method.value='Cash';
+  bindPaymentMethodCurrency(f);
+  syncPaymentCurrencyFromMethod(f,{force:true});
   const t=state.tenancies.find(x=>Number(x.id)===Number(f.elements.tenancy_id.value));
   applyPaymentPeriodDefaults(f,t,{force:true,fillAmount:true});
   $('#payment-dialog-title').textContent='Record rent payment';
@@ -952,8 +1002,11 @@ function openEditPayment(id){
   f.elements.period_start.value=p.period_start||'';
   f.elements.period_end.value=p.period_end||'';
   f.elements.received_date.value=p.received_date||today();
-  f.elements.payment_method.value=p.payment_method||'';
-  f.elements.notes.value=p.notes||'';
+  f.elements.payment_method.value=normalizePaymentMethod(p.payment_method);
+  f.elements.notes.value=displayPaymentNotes(p);
+  bindPaymentMethodCurrency(f);
+  f.elements.currency.value=paymentCurrency(p);
+  f.elements.currency.dataset.touched='1';
   // If period was missing (common cause of stuck "due soon"), offer the next cycle defaults without wiping amount.
   if(!f.elements.period_end.value){
     const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
@@ -967,7 +1020,7 @@ function openEditPayment(id){
 function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
 async function deletePayment(id){
   if(!canEdit())return;
-  const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount)}? This cannot be undone.`))return;
+  const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount,paymentCurrency(p))}? This cannot be undone.`))return;
   try{
     await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});
     toast('Payment deleted');
@@ -1173,6 +1226,8 @@ $('#payment-form').onsubmit=async e=>{
   }
   if(!period_end){err.textContent='Period end is required so Rent due status can update after payment.';err.classList.remove('hidden');return}
   if(period_start&&period_end&&period_end<period_start){err.textContent='Period end must be on or after period start.';err.classList.remove('hidden');return}
+  const method=normalizePaymentMethod(fd.get('payment_method'));
+  const currency=fd.get('currency')==='CNY'?'CNY':'AUD';
   const row={
     tenancy_id:tid,
     amount:Number(fd.get('amount')),
@@ -1180,8 +1235,8 @@ $('#payment-form').onsubmit=async e=>{
     period_end,
     received_date:fd.get('received_date')||today(),
     status:'paid',
-    payment_method:fd.get('payment_method')||null,
-    notes:fd.get('notes')||null,
+    payment_method:method,
+    notes:withPaymentCurrency(fd.get('notes')||'',currency),
     recorded_by:getSession()?.user?.id||null
   };
   const editId=Number(fd.get('id')||0);

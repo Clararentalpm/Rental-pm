@@ -1,5 +1,11 @@
 # Changelog
 
+## Shared payment groups — 2026-09-08
+- Owner-confirmed rule: same `room_id` + same `check_in` date share one payment group.
+- Any paid `rent_payments` row for a group member covers the whole group (clears overdue for co-occupants).
+- If one person ends/does not renew, after check-out they leave the active group; remaining stays continue alone.
+- Rent due schedule shows the group total **once** (option A), labelled as a shared payment group.
+
 ## Free GitHub Pages URL — 2026-09-08
 - Added GitHub Actions Pages deploy from `Rental Management/`.
 - Set app `CANONICAL_URL` to `https://clararentalpm.github.io/Rental-pm/` (Netlify team production deploys paused).

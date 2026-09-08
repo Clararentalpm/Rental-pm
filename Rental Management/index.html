@@ -194,9 +194,9 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <label>Peak min<input name="peak_price_min" type="number" step="0.01"></label><label>Peak max<input name="peak_price_max" type="number" step="0.01"></label>
     <label>Off-peak min<input name="off_peak_min" type="number" step="0.01"></label><label>Off-peak max<input name="off_peak_max" type="number" step="0.01"></label>
     <label>Short stay min<input name="short_stay_min" type="number" step="0.01"></label><label>Short stay max<input name="short_stay_max" type="number" step="0.01"></label>
-    <label>Short stay unit<input name="short_stay_unit" placeholder="night / day"></label><label>Extra bed fee<input name="extra_bed_fee" type="number" step="0.01"></label>
+    <label>Short stay unit<input name="short_stay_unit" placeholder="night / day"></label><label>Extra sofa fee ($/day)<input name="extra_bed_fee" type="number" step="0.01" placeholder="e.g. 25"></label>
   </div>
-  <label style="margin-top:12px">Amenities<textarea name="amenities" rows="2"></textarea></label>
+  <label style="margin-top:12px">Amenities<textarea name="amenities" rows="2" placeholder="e.g. Extra sofa / sofa guest available"></textarea></label>
   <label style="margin-top:12px">Pricing note<textarea name="pricing_note" rows="2"></textarea></label>
   <div id="room-error" class="error hidden"></div>
   <div class="dialog-actions"><button type="button" class="btn ghost" data-close="room-dialog">Cancel</button><button class="btn primary">Save room profile</button></div>
@@ -247,7 +247,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   <div class="dialog-head"><div><h2>Bond / deposit action</h2><div id="bond-action-name" class="muted small"></div></div><button type="button" class="close" data-close="bond-action-dialog">×</button></div>
   <input type="hidden" name="bond_id">
   <div class="form-grid" style="margin-top:14px">
-    <label>Action<select name="action"><option value="partial_refund">Partial refund</option><option value="full_refund">Full refund</option><option value="deduction">Deduction</option><option value="note">Note only</option></select></label>
+    <label>Action<select name="action"><option value="mark_refunded">Mark as refunded</option><option value="mark_not_refunded">Mark as not refunded</option><option value="partial_refund">Partial refund</option><option value="full_refund">Full refund</option><option value="deduction">Deduction</option><option value="note">Note only</option></select></label>
     <label>Amount<input name="amount" type="number" step="0.01"></label>
     <label>Method<input name="method" placeholder="Transfer / Cash"></label>
     <label>Reference<input name="reference"></label>
@@ -541,11 +541,14 @@ function tenantsPage(){
   ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
 }
 function roomsPage(){
-  return `<section class="panel"><div class="panel-head"><h2>Room profiles</h2><span class="muted small">Pricing, capacity and amenities</span></div><div class="room-grid">${currentPropertyRooms().map(r=>{
+  return `<section class="panel"><div class="panel-head"><div><h2>Room profiles</h2><div class="muted small">Pricing, capacity and amenities. Extra sofa / sofa-guest rate is shown per room.</div></div></div>
+  <div class="note" style="margin-bottom:14px"><b>Extra sofa:</b> use Extra sofa fee ($/day) on each room profile (McGregor sofa guest rate is typically <b>$25/day</b>).</div>
+  <div class="room-grid">${currentPropertyRooms().map(r=>{
     const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
     return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
     <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
-    <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd></dl>
+    <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd>
+    <dt>Extra sofa</dt><dd>${p.extra_bed_fee!==null&&p.extra_bed_fee!==undefined&&p.extra_bed_fee!==''?`${money(p.extra_bed_fee)} / day`:'—'}</dd></dl>
     ${p.amenities?`<div class="nextline">${esc(p.amenities)}</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn primary edit-room" data-room="${r.id}">Edit profile</button></div>`:''}</article>`
   }).join('')}</div></section>`;
 }
@@ -635,7 +638,7 @@ function incomePage(){
 }
 function bondsPage(){
   const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.bonds.filter(b=>ids.has(b.tenancy_id)).sort((a,b)=>b.id-a.id);
-  return `<section class="panel"><div class="panel-head"><h2>Bond & refund register</h2>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Refunded</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc(b.bond_type||'bond')}</td><td><b>${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td><b>${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td>${b.received?'Yes':'No'}</td><td>${b.refunded?'Yes':'No'}</td><td>${esc(b.remaining_description||b.notes||'—')}</td><td>${canEdit()?`<button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No bond records.</div>'}</section>
+  return `<section class="panel"><div class="panel-head"><h2>Bond & refund register</h2>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Refunded</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc(b.bond_type||'bond')}</td><td><b>${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td><b>${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}</b></td><td>${b.received?'Yes':'No'}</td><td><b>${b.refunded?'Refunded':'Not refunded'}</b></td><td>${esc(b.remaining_description||b.notes||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No bond records.</div>'}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>rows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
@@ -679,6 +682,8 @@ function render(){
   const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
   const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
   $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));
+  $$('.bond-mark-refunded').forEach(b=>b.onclick=()=>setBondRefundedStatus(Number(b.dataset.bond),true));
+  $$('.bond-mark-not-refunded').forEach(b=>b.onclick=()=>setBondRefundedStatus(Number(b.dataset.bond),false));
   $$('[data-amode]').forEach(b=>b.onclick=()=>{state.availabilityMode=b.dataset.amode;render()});
   const finder=$('#find-room');if(finder)finder.onclick=()=>{
     const a=$('#find-in').value,b=$('#find-out').value,res=$('#find-result');if(!a||!b||b<=a){res.innerHTML='<div class="error">Choose a valid check-in and check-out time.</div>';return}
@@ -762,8 +767,26 @@ function openTenancy(id){
 }
 function openBondAction(id){
   const b=state.bonds.find(x=>Number(x.id)===Number(id));if(!b)return;
-  const f=$('#bond-action-form');f.reset();f.elements.bond_id.value=b.id;$('#bond-action-name').textContent=`Bond #${b.id} · remaining ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`;
+  const f=$('#bond-action-form');f.reset();f.elements.bond_id.value=b.id;$('#bond-action-name').textContent=`Bond #${b.id} · remaining ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} · ${b.refunded?'Refunded':'Not refunded'}`;
   $('#bond-action-dialog').showModal();
+}
+async function setBondRefundedStatus(id,refunded){
+  if(!canEdit())return;
+  const b=state.bonds.find(x=>Number(x.id)===Number(id));if(!b)return;
+  const label=refunded?'refunded':'not refunded';
+  if(!confirm(`Mark this bond / deposit as ${label}?`))return;
+  try{
+    const patchRow=refunded
+      ?{refunded:true,refunded_date:b.refunded_date||today(),remaining_amount:0,remaining_description:'Marked as refunded'}
+      :{refunded:false,refunded_date:null,remaining_amount:bondRemaining({...b,refunded:false,refund_amount:b.refund_amount||0})??Number(b.amount||0),remaining_description:'Marked as not refunded'};
+    if(refunded&&(b.refund_amount===null||b.refund_amount===undefined||Number(b.refund_amount)===0)){
+      patchRow.refund_amount=Number(b.amount||0);
+    }
+    await patch('bonds',`id=eq.${id}`,patchRow);
+    await insert('bond_refund_events',{bond_id:id,action:refunded?'mark_refunded':'mark_not_refunded',amount:refunded?Number(b.amount||0):null,currency:b.original_currency||b.currency||'AUD',method:null,reference:null,notes:refunded?'Marked as refunded from Bond register':'Marked as not refunded from Bond register',created_by:getSession()?.user?.id||null}).catch(()=>{});
+    toast(refunded?'Bond marked as refunded':'Bond marked as not refunded');
+    await loadAll();
+  }catch(e){alert(e.message)}
 }
 function openRoom(id){
   const r=roomBy(id),p=state.roomProfiles.find(x=>Number(x.room_id)===Number(id))||{},f=$('#room-form');f.reset();f.elements.room_id.value=id;$('#room-dialog-name').textContent=roomLabel(id);
@@ -879,6 +902,8 @@ $('#bond-action-form').onsubmit=async e=>{
   try{
     await insert('bond_refund_events',{bond_id:id,action,amount:amount||null,currency:b?.original_currency||b?.currency||'AUD',method:fd.get('method')||null,reference:fd.get('reference')||null,notes:fd.get('notes')||null,created_by:getSession()?.user?.id||null});
     const current=bondRemaining(b)??Number(b?.amount||0);let remaining=current,patchRow={};
+    if(action==='mark_refunded'){patchRow={refunded:true,refunded_date:today(),refund_amount:amount||Number(b?.refund_amount||b?.amount||0),remaining_amount:0,remaining_description:'Marked as refunded'};}
+    if(action==='mark_not_refunded'){patchRow={refunded:false,refunded_date:null,remaining_description:'Marked as not refunded'}; if(amount) patchRow.remaining_amount=amount;}
     if(action==='partial_refund'){remaining=Math.max(0,current-amount);patchRow={refund_amount:Number(b?.refund_amount||0)+amount,remaining_amount:remaining,remaining_description:`Remaining after partial refund: ${remaining}`}}
     if(action==='full_refund'){remaining=0;patchRow={refunded:true,refunded_date:today(),refund_amount:Number(b?.refund_amount||0)+amount,refund_method:fd.get('method')||null,refund_reference:fd.get('reference')||null,remaining_amount:0,remaining_description:'Fully refunded'}}
     if(action==='deduction'){remaining=Math.max(0,current-amount);patchRow={deduction_amount:Number(b?.deduction_amount||0)+amount,deduction_reason:fd.get('notes')||null,remaining_amount:remaining,remaining_description:`Remaining after deduction: ${remaining}`}}

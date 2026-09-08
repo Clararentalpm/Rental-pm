@@ -325,8 +325,22 @@ function roomBy(id){return state.rooms.find(r=>Number(r.id)===Number(id))}
 function propertyBy(id){return state.properties.find(p=>Number(p.id)===Number(id))}
 function property(){return propertyBy(state.propertyId)}
 function tenantBy(id){return state.tenants.find(t=>Number(t.id)===Number(id))}
-function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';return `${propertyBy(r.property_id)?.name||''} Room ${r.room_no}`}
-function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId))}
+/** Sofa / living-area unit (McGregor 6th profile): marked via room notes or profile room_type. */
+function isSofaRoom(r){
+  if(!r)return false;
+  if(/sofa/i.test(String(r.notes||'')))return true;
+  const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id));
+  return /sofa/i.test(String(p?.room_type||''));
+}
+function roomShortName(r){if(!r)return'Unassigned';return isSofaRoom(r)?'Sofa':`Room ${r.room_no}`}
+function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&r.ensuite)?`${n} · Ensuite`:n}
+function roomChipLabel(r){if(!r)return'Other';return isSofaRoom(r)?'Sofa':`R${r.room_no}`}
+function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';const prop=propertyBy(r.property_id)?.name||'';return `${prop} ${roomShortName(r)}`.trim()}
+function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort((a,b)=>{
+  const as=isSofaRoom(a)?1:0,bs=isSofaRoom(b)?1:0;if(as!==bs)return as-bs;return Number(a.room_no)-Number(b.room_no);
+})}
+function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
+function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
 function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
 /*
  * Shared payment-group rules (owner-confirmed 2026-09-08):
@@ -518,7 +532,7 @@ function overviewPage(){
     const cur=current.filter(t=>Number(t.room_id)===Number(r.id));
     const next=upcoming.filter(t=>Number(t.room_id)===Number(r.id)).sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''))[0];
     const rp=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
-    return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
+    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
       <div class="occupant">${cur.length?cur.map(t=>esc(tenantBy(t.tenant_id)?.name||'Tenant')).join(' + '):'<span class="muted">Vacant now</span>'}</div>
       <div class="subline">${cur.length?cur.map(t=>`${money(t.rent_amount)} / ${esc(t.rent_period||'period')}`).join(' · '):''}</div>
       ${next?`<div class="nextline"><b>Next:</b> ${esc(tenantBy(next.tenant_id)?.name||'Tenant')} · ${fmtDate(next.check_in)}</div>`:''}
@@ -560,7 +574,7 @@ function tenantsPage(){
   return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small">Current = still staying. Past = already checked out. Search works across all filters.</span></div></div>
   <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, property, room, stay type or notes…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind==='historical'?'past':kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
+  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind==='historical'?'past':kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
 }
 function getExtraRoomFee(p){
   const m=String(p?.pricing_note||'').match(/(?:^|\n)EXTRA_ROOM_FEE:([0-9.]+)(?:\n|$)/);
@@ -575,13 +589,16 @@ function withExtraRoomFee(note,fee){
   return (base?base+'\n':'')+`EXTRA_ROOM_FEE:${Number(fee)}`;
 }
 function roomsPage(){
-  return `<section class="panel"><div class="panel-head"><div><h2>Room profiles</h2><div class="muted small">Pricing, capacity and amenities. Extra room (incl. sofa guest as extra room) and 加床 are shown per room.</div></div></div>
-  <div class="note" style="margin-bottom:14px"><b>Extra room</b> = sofa / living-area guest treated as an extra room (McGregor typically <b>$25/day</b>). <b>加床</b> = extra bed in the room (typically <b>$50</b>).</div>
+  const mcg=isMcGregorProperty(), needSofa=mcg&&!propertyHasSofa()&&canEdit();
+  const sofaCta=needSofa?`<div class="note" style="margin-bottom:14px"><b>McGregor:</b> 5 rooms + Sofa. Sofa unit is missing — click to add the 6th profile (Extra room, typically $25/day). <button type="button" class="btn primary" id="add-sofa-room" style="margin-left:8px">+ Add Sofa unit</button></div>`:'';
+  const layoutNote=mcg?`<div class="note" style="margin-bottom:14px"><b>McGregor layout:</b> Room 1–5 + <b>Sofa</b> (6th profile = Extra room / living-area guest, typically <b>$25/day</b>). <b>加床</b> = extra bed in a room (typically <b>$50</b>).</div>`:`<div class="note" style="margin-bottom:14px"><b>Extra room</b> = sofa / living-area guest treated as an extra room. <b>加床</b> = extra bed in the room (typically <b>$50</b>).</div>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Room profiles</h2><div class="muted small">Pricing, capacity and amenities. McGregor has 5 rooms + Sofa as the 6th profile.</div></div></div>
+  ${sofaCta}${layoutNote}
   <div class="room-grid">${currentPropertyRooms().map(r=>{
     const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
     const extraRoom=getExtraRoomFee(p);
     const note=displayPricingNote(p);
-    return `<article class="room-card"><div class="room-head"><h3>Room ${r.room_no}</h3>${r.ensuite?'<span class="badge ensuite">Ensuite</span>':''}</div>
+    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
     <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
     <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd>
     <dt>Extra room</dt><dd>${extraRoom!==''?`${money(extraRoom)} / day`:'—'}</dd>
@@ -617,7 +634,7 @@ function availabilityPage(){
       const futureIndef=all.find(t=>t.check_in>today()&&!t.check_out&&!t.confirmed_until);
       const finalEnd=futureIndef?.check_in||horizon;
       if(cursor<finalEnd)slots.push([cursor,finalEnd,futureIndef?.check_in_time||null]);
-      return `<div class="vacancy-card"><h3>Room ${r.room_no}${r.ensuite?' · Ensuite':''}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}</div>`;
+      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}</div>`;
     }).join('');
     return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded.</div></div>${switcher}</div>
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
@@ -628,7 +645,7 @@ function availabilityPage(){
   for(let i=0;i<90;i++){
     const d=new Date(start);d.setDate(d.getDate()+i);const iso=d.toISOString().slice(0,10),dow=(d.getDay()+6)%7;
     const active=ts.filter(t=>t.check_in&&t.check_in<=iso&&(!(t.check_out||t.confirmed_until)||(t.check_out||t.confirmed_until)>=iso));
-    const chips=active.map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?`R${roomBy(t.room_id)?.room_no||''}`:(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
+    const chips=active.map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?roomChipLabel(roomBy(t.room_id)):(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
     cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||'<div class="muted small">Available</div>'}</div>`;
   }
   return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))}</div></div><div>${switcher}<div class="legend" style="margin-top:8px"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
@@ -714,6 +731,7 @@ function render(){
   $('#content').innerHTML=html;
   $$('.seg [data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;render()});
   $$('.edit-room').forEach(b=>b.onclick=()=>openRoom(Number(b.dataset.room)));
+  const addSofa=$('#add-sofa-room');if(addSofa)addSofa.onclick=()=>addMcGregorSofaRoom();
   $$('.edit-tenant').forEach(b=>b.onclick=()=>openTenant(Number(b.dataset.tenant)));
   $$('.edit-tenancy').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
   const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
@@ -729,7 +747,7 @@ function render(){
       const s=t.check_in+'T'+(t.check_in_time||'00:00'),e=(t.check_out||t.confirmed_until||'9999-12-31')+'T'+(t.check_out_time||'23:59');
       return a<e&&b>s;
     }));
-    res.innerHTML=available.length?`<div class="note"><b>Available:</b> ${available.map(r=>`Room ${r.room_no}${r.ensuite?' (Ensuite)':''}`).join(' · ')}</div>`:'<div class="error">No room is fully available for that period.</div>';
+    res.innerHTML=available.length?`<div class="note"><b>Available:</b> ${available.map(r=>roomOptionLabel(r)).join(' · ')}</div>`:'<div class="error">No room is fully available for that period.</div>';
   };
   $$('.delete-payment').forEach(b=>b.onclick=()=>deletePayment(Number(b.dataset.payment)));
   $$('.delete-bond').forEach(b=>b.onclick=()=>deleteBond(Number(b.dataset.bond)));
@@ -752,7 +770,7 @@ function render(){
 function tenancyOptions(){
   return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
 }
-function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">Room ${r.room_no}${r.ensuite?' · Ensuite':''}</option>`).join('');$('#stay-dialog').showModal()}
+function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('');$('#stay-dialog').showModal()}
 function openPayment(){const f=$('#payment-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#payment-dialog').showModal()}
 function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
 async function deletePayment(id){
@@ -797,7 +815,7 @@ function openTenant(id){
 function openTenancy(id){
   const t=state.tenancies.find(x=>Number(x.id)===Number(id)),f=$('#tenancy-form');if(!t)return;
   f.reset();f.elements.id.value=t.id;$('#tenancy-dialog-name').textContent=`${tenantBy(t.tenant_id)?.name||'Tenant'} · ${roomLabel(t.room_id)}`;
-  f.elements.room_id.innerHTML='<option value="">Unassigned / Living Room</option>'+currentPropertyRooms().map(r=>`<option value="${r.id}">Room ${r.room_no}${r.ensuite?' · Ensuite':''}</option>`).join('');
+  f.elements.room_id.innerHTML='<option value="">Unassigned / Living Room</option>'+currentPropertyRooms().map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('');
   ['room_id','status','check_in','check_in_time','confirmed_until','check_out','check_out_time','rent_amount','rent_period','payment_cycle_weeks','people_count','sleeping_location','notes'].forEach(k=>{if(f.elements[k])f.elements[k].value=t[k]??''});
   const noOut=!t.check_out&&!t.confirmed_until;f.elements.no_checkout.checked=noOut;f.elements.check_out.disabled=noOut;f.elements.check_out_time.disabled=noOut;f.elements.confirmed_until.disabled=noOut;
   $('#tenancy-dialog').showModal();
@@ -894,6 +912,35 @@ $$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.cl
 function openAddProperty(){
   if(!canEdit())return;
   const f=$('#property-form');f.reset();f.elements.room_count.value=5;$('#property-error').classList.add('hidden');$('#property-dialog').showModal();
+}
+async function addMcGregorSofaRoom(){
+  if(!canEdit())return;
+  const p=property();
+  if(!isMcGregorProperty(p)){alert('Sofa unit shortcut is for McGregor only.');return}
+  if(propertyHasSofa(p.id)){toast('Sofa unit already exists');return}
+  try{
+    const rooms=currentPropertyRooms();
+    const used=new Set(rooms.map(r=>Number(r.room_no)));
+    let roomNo=6;if(used.has(6)){roomNo=Math.max(0,...[...used])+1}
+    const rs=await insert('rooms',{property_id:p.id,room_no:roomNo,ensuite:false,notes:'Sofa'});
+    const room=rs?.[0];if(!room?.id)throw new Error('Sofa room was not returned from the database.');
+    await insert('room_profiles',{
+      room_id:room.id,
+      room_type:'Sofa',
+      capacity:1,
+      bathroom_type:'Shared',
+      beds:0,
+      standard_price:25,
+      current_asking_price:25,
+      short_stay_min:25,
+      short_stay_max:25,
+      short_stay_unit:'day',
+      amenities:'Sofa / living-area guest — Extra room',
+      pricing_note:withExtraRoomFee('McGregor Sofa (6th profile). Extra room typically $25/day.',25)
+    }).catch(()=>{});
+    toast('Sofa unit added to McGregor');
+    await loadAll();
+  }catch(ex){alert(ex.message)}
 }
 $('#property-form').onsubmit=async e=>{
   e.preventDefault();if(!canEdit())return;

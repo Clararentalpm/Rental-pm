@@ -99,6 +99,8 @@ Clicking a room or tenant from the dashboard should open the relevant record. Ke
 
 The property currently has multiple rooms, including Room 1–Room 5.
 
+**McGregor layout (owner-confirmed):** five rooms (Room 1–5) plus a sixth profile **Sofa** (living-area / Extra room guest, typically $25/day). Sofa is a bookable unit in Room Profiles, stay dropdowns, dashboard, and calendar — labelled **Sofa**, not “Room 6”.
+
 Each room needs its own profile/history:
 
 - Current tenant

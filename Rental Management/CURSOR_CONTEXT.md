@@ -2,9 +2,11 @@
 
 ## Authoritative base
 - Product: Rental PM
+- Working folder name: **Rental Management**
 - Base version: **V6.5.2**
-- Source in this folder: `index.html` + `netlify.toml`
+- Source in this folder: `index.html` (app). Deploy config: repo-root `netlify.toml` publishes this folder.
 - Treat this existing code as the authoritative starting point. Do **not** rebuild from scratch.
+- Future edits should stay inside `Rental Management/` unless deploy/root config must change.
 
 ## First instruction to Cursor
 Before changing code, inspect the full project and report:

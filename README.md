@@ -1,21 +1,23 @@
-# Rental PM
+# Rental Management
 
-Property / room rental management (V6.5.2).
+This repository’s working app folder is **`Rental Management/`**.
 
-## Start here
-1. Read [`CURSOR_CONTEXT.md`](CURSOR_CONTEXT.md)
-2. Read [`ASSESSMENT.md`](ASSESSMENT.md)
-3. Follow [`TODO.md`](TODO.md)
+以后修改、加功能、修 bug，都在这个文件夹里做。
+
+## Open the project
+- App: [`Rental Management/index.html`](Rental%20Management/index.html)
+- Context: [`Rental Management/CURSOR_CONTEXT.md`](Rental%20Management/CURSOR_CONTEXT.md)
+- Assessment: [`Rental Management/ASSESSMENT.md`](Rental%20Management/ASSESSMENT.md)
+- TODO: [`Rental Management/TODO.md`](Rental%20Management/TODO.md)
+- Changelog: [`Rental Management/CHANGELOG.md`](Rental%20Management/CHANGELOG.md)
 
 ## Run locally
-Serve the project root as static files (example):
-
 ```bash
+cd "Rental Management"
 python3 -m http.server 8080
 ```
-
-Open `http://localhost:8080/`. Sign in with an existing staff account. Do not seed or modify production Supabase data casually.
+Open `http://localhost:8080/`.
 
 ## Deploy
-Canonical host referenced in app: `https://rental-pm-v2.netlify.app/`  
-`netlify.toml` was not included in the V6.5.2 handoff package — confirm Netlify settings before changing hosting.
+`netlify.toml` at the repo root publishes the `Rental Management` folder.
+Canonical host: `https://rental-pm-v2.netlify.app/`

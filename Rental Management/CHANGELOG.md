@@ -1,5 +1,9 @@
 # Changelog
 
+## Project folder layout — 2026-09-08
+- Moved the working app into repo folder **`Rental Management/`** (future edits live here).
+- Kept `netlify.toml` at the repo root with `publish = "Rental Management"`.
+
 ## Phase 1 stabilise — 2026-09-08
 - Fixed Income page crash: added missing `property()` helper (uses current `state.propertyId`).
 - Fixed owner payment delete to use table `rent_payments` (was incorrectly deleting from `payments`).

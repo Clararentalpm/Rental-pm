@@ -1,5 +1,9 @@
 # Changelog
 
+## Add Property tab + Past tenant filter — 2026-09-08
+- Top property tabs: added **+ Property** (owner/manager) to create a new property + starter rooms.
+- Tenants: checked-out stays (`check_out <= today`) count as **past**; Current uses any still-active stay, not only highest stay id.
+
 ## Extra room + 加床 fees — 2026-09-08
 - Reframed former “Extra sofa” as **Extra room** (sofa guest treated as extra room; typically $25/day).
 - Added per-room **加床 / Extra bed** fee (typically $50), stored in existing `extra_bed_fee`.

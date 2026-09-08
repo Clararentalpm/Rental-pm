@@ -133,6 +133,16 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   </main>
 </div>
 
+<dialog id="property-dialog"><form id="property-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Add property</h2><div class="muted small">Creates a new property tab and starter rooms.</div></div><button type="button" class="close" data-close="property-dialog">×</button></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Property name<input name="name" required placeholder="e.g. New house"></label>
+    <label>Rooms to create<input name="room_count" type="number" min="1" max="20" value="5"></label>
+  </div>
+  <div id="property-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="property-dialog">Cancel</button><button class="btn primary">Create property</button></div>
+</form></dialog>
+
 <dialog id="stay-dialog"><form id="stay-form" class="dialog-body">
   <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Add a new tenant and allocate a room.</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
@@ -404,10 +414,20 @@ function overdueDays(t){
 }
 function tenancyKind(t){
   const d=today();
-  if(t.check_out && t.check_out<d)return'historical';
+  // Already checked out (on/after checkout date) => past/historical
+  if(t.check_out && t.check_out<=d)return'historical';
   if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return'historical';
   if((t.check_in&&t.check_in>d)||t.status==='upcoming')return'upcoming';
   return'current';
+}
+/** Best stay to show for a tenant profile row + filter bucket. */
+function tenantProfileRow(tenant){
+  const stays=state.tenancies.filter(x=>Number(x.tenant_id)===Number(tenant.id));
+  if(!stays.length)return {tenant,stay:null,p:null,r:null,kind:'historical'};
+  const ranked=stays.map(t=>({t,kind:tenancyKind(t)}));
+  const pick=ranked.find(x=>x.kind==='current')||ranked.find(x=>x.kind==='upcoming')||ranked.sort((a,b)=>Number(b.t.id)-Number(a.t.id))[0];
+  const stay=pick.t, kind=pick.kind, r=stay?roomBy(stay.room_id):null, p=r?propertyBy(r.property_id):null;
+  return {tenant,stay,p,r,kind};
 }
 function badge(v){return `<span class="badge ${esc(v)}">${esc(v.replaceAll('_',' '))}</span>`}
 
@@ -457,8 +477,11 @@ async function loadAll(){
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }
 function renderChrome(){
-  $('#property-tabs').innerHTML=state.properties.map(p=>`<button class="tab ${Number(p.id)===Number(state.propertyId)?'active':''}" data-prop="${p.id}">${esc(p.name)}</button>`).join('');
+  const tabs=state.properties.map(p=>`<button class="tab ${Number(p.id)===Number(state.propertyId)?'active':''}" data-prop="${p.id}">${esc(p.name)}</button>`).join('');
+  const add=canEdit()?`<button type="button" class="tab" id="add-property-tab">+ Property</button>`:'';
+  $('#property-tabs').innerHTML=tabs+add;
   $$('#property-tabs [data-prop]').forEach(b=>b.onclick=()=>{state.propertyId=Number(b.dataset.prop);renderChrome();render()});
+  const ap=$('#add-property-tab');if(ap)ap.onclick=()=>openAddProperty();
 }
 function setPage(p){
  state.page=p;
@@ -531,16 +554,13 @@ function tenancyTable(rows,showActions=false){
 }
 function tenantsPage(){
   const q=(state.tenantSearch||'').trim().toLowerCase(),filter=state.tenantFilter||'current';
-  const rows=state.tenants.map(tenant=>{
-    const stays=state.tenancies.filter(x=>x.tenant_id===tenant.id).sort((a,b)=>b.id-a.id);
-    const stay=stays[0],r=stay?roomBy(stay.room_id):null,p=r?state.properties.find(x=>x.id===r.property_id):null,kind=stay?tenancyKind(stay):'historical';
-    return {tenant,stay,p,r,kind};
-  }).filter(x=>filter==='all'||(filter==='past'?x.kind==='historical':x.kind===filter))
+  const rows=state.tenants.map(tenantProfileRow)
+    .filter(x=>filter==='all'||(filter==='past'?x.kind==='historical':x.kind===filter))
     .sort((a,b)=>(a.tenant.name||'').localeCompare(b.tenant.name||''));
-  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small">Search current, upcoming and previous tenants.</span></div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small">Current = still staying. Past = already checked out. Search works across all filters.</span></div></div>
   <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, property, room, stay type or notes…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
+  ${rows.map(({tenant,stay,p,r,kind})=>`<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?.room_no,stay?.tenancy_type,stay?.sleeping_location,stay?.notes].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · Room ${esc(r.room_no)}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div></td><td>${stay?`${money(stay.rent_amount)} / ${esc(stay.rent_period||'—')}`:'—'}</td><td>${stay?badge(kind==='historical'?'past':kind):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}</div>`:'—'}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">No tenants match this search.</td></tr>'}</tbody></table></div></section>`;
 }
 function getExtraRoomFee(p){
   const m=String(p?.pricing_note||'').match(/(?:^|\n)EXTRA_ROOM_FEE:([0-9.]+)(?:\n|$)/);
@@ -871,6 +891,28 @@ $('#nav').onclick=e=>{
 $('#new-stay').onclick=openStay;$('#refresh').onclick=()=>loadAll().catch(e=>alert(e.message));$('#logout').onclick=()=>{clearSession();location.reload()};
 $$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());
 
+function openAddProperty(){
+  if(!canEdit())return;
+  const f=$('#property-form');f.reset();f.elements.room_count.value=5;$('#property-error').classList.add('hidden');$('#property-dialog').showModal();
+}
+$('#property-form').onsubmit=async e=>{
+  e.preventDefault();if(!canEdit())return;
+  const f=e.currentTarget,fd=new FormData(f),err=$('#property-error');err.classList.add('hidden');
+  const name=String(fd.get('name')||'').trim();let roomCount=Number(fd.get('room_count')||5);
+  if(!name){err.textContent='Property name is required.';err.classList.remove('hidden');return}
+  if(!Number.isFinite(roomCount)||roomCount<1)roomCount=1;if(roomCount>20)roomCount=20;
+  try{
+    const created=await insert('properties',{name});
+    const prop=created?.[0];if(!prop?.id)throw new Error('Property was not returned from the database.');
+    for(let n=1;n<=roomCount;n++){
+      const rs=await insert('rooms',{property_id:prop.id,room_no:n,ensuite:false});
+      const room=rs?.[0];
+      if(room?.id)await insert('room_profiles',{room_id:room.id}).catch(()=>{});
+    }
+    f.reset();$('#property-dialog').close();toast(`Property “${name}” created`);
+    await loadAll();state.propertyId=prop.id;renderChrome();render();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
 $('#stay-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#stay-error');err.classList.add('hidden');
   try{

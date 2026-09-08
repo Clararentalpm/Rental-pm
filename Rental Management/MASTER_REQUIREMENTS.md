@@ -230,6 +230,14 @@ Payment management should support:
 Payment records belong to the correct tenant/stay.  
 Do not delete rental history when a tenant leaves.
 
+### Shared payment group rules (owner-confirmed 2026-09-08)
+
+1. Same room + same check-in date = one payment group (joint booking).
+2. Any paid rent payment for any group member covers the whole group.
+3. Co-occupants must not show overdue when the group period is already paid (e.g. 辣豆 + Vicky).
+4. If one person renews and another does not: after the departing person’s check-out they leave the active group; remaining occupants continue alone.
+5. Rent-due amount display: show the group total once (do not double-count).
+
 ---
 
 ## 9. Bond / deposit

@@ -316,12 +316,65 @@ function tenantBy(id){return state.tenants.find(t=>Number(t.id)===Number(id))}
 function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';return `${propertyBy(r.property_id)?.name||''} Room ${r.room_no}`}
 function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId))}
 function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
+/*
+ * Shared payment-group rules (owner-confirmed 2026-09-08):
+ * 1) Same room_id + same check_in date => one payment group (joint booking).
+ * 2) Any paid rent_payments row for any group member covers the whole group.
+ * 3) Therefore one person's payment clears overdue for all co-occupants in the group.
+ * 4) If one person ends/does not renew: after their check_out they leave the active group;
+ *    remaining occupants continue alone (or with whoever is still active).
+ * 5) Rent-due amount display (option A): show the group total once, do not double-count.
+ */
+function paymentGroupMembers(t){
+  if(!t||t.room_id===null||t.room_id===undefined||!t.check_in)return t?[t]:[];
+  return state.tenancies.filter(x=>Number(x.room_id)===Number(t.room_id)&&x.check_in===t.check_in);
+}
+function stayActiveOn(t,onDate=today()){
+  if(!t||!t.check_in)return false;
+  if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return false;
+  if(t.check_out&&t.check_out<=onDate)return false;
+  if(t.status==='upcoming'&&t.check_in>onDate)return false;
+  return true;
+}
+function activePaymentGroupMembers(t,onDate=today()){
+  const members=paymentGroupMembers(t).filter(x=>stayActiveOn(x,onDate));
+  return members.length?members:(stayActiveOn(t,onDate)?[t]:[]);
+}
+/** Non-historical members of the same room+check-in group (for due schedule / labels). */
+function scheduleGroupMembers(t){
+  const members=paymentGroupMembers(t).filter(x=>tenancyKind(x)!=='historical');
+  return members.length?members:[t];
+}
+function isPaymentGroupPrimary(t){
+  const members=scheduleGroupMembers(t);
+  if(!members.some(x=>Number(x.id)===Number(t.id)))return false;
+  if(members.length<=1)return true;
+  return Number(t.id)===Math.min(...members.map(x=>Number(x.id)));
+}
+function paymentGroupName(t){
+  const members=scheduleGroupMembers(t);
+  const names=members.map(x=>tenantBy(x.tenant_id)?.name||'Tenant');
+  return names.length?names.join(' + '):(tenantBy(t.tenant_id)?.name||'Tenant');
+}
+function expectedRentAmount(t){
+  if(t.rent_period==='week'&&t.payment_cycle_weeks)return Number(t.rent_amount||0)*Number(t.payment_cycle_weeks);
+  return Number(t.rent_amount||0);
+}
+function paymentGroupExpectedAmount(t){
+  return scheduleGroupMembers(t).reduce((s,x)=>s+expectedRentAmount(x),0);
+}
 function tenancyPayments(t){
+  // Solo helper kept for clarity; group overdue uses groupTenancyPayments().
   return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&String(p.status||'').toLowerCase()==='paid'&&p.period_start&&p.period_end)
     .sort((a,b)=>String(a.period_start).localeCompare(String(b.period_start)));
 }
+function groupTenancyPayments(t){
+  const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
+  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&String(p.status||'').toLowerCase()==='paid'&&p.period_start&&p.period_end)
+    .sort((a,b)=>String(a.period_start).localeCompare(String(b.period_start)));
+}
 function paidThrough(t){
-  const ps=tenancyPayments(t);if(!ps.length)return null;
+  const ps=groupTenancyPayments(t);if(!ps.length)return null;
   return ps.reduce((mx,p)=>!mx||p.period_end>mx?p.period_end:mx,null);
 }
 function nextRentDue(t){
@@ -334,6 +387,7 @@ function nextRentDue(t){
 function rentState(t){
   if(t.status==='upcoming'&&t.check_in>today())return 'upcoming';
   if(t.check_out&&t.check_out<=today())return 'completed';
+  if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return 'completed';
   const due=nextRentDue(t);if(!due)return 'unknown';
   const delta=Math.floor((new Date(due+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
   if(delta<0)return 'overdue';
@@ -430,7 +484,7 @@ function overviewPage(){
   const horizon=addDays(today(),7);
   const arrivals=ts.filter(t=>t.check_in&&t.check_in>=today()&&t.check_in<=horizon&&tenancyKind(t)!=='historical');
   const departures=ts.filter(t=>{const d=t.check_out||t.confirmed_until;return d&&d>=today()&&d<=horizon});
-  const overdue=ts.filter(t=>rentState(t)==='overdue');
+  const overdue=ts.filter(t=>['overdue','due today'].includes(rentState(t))&&isPaymentGroupPrimary(t));
   const bondsToRefund=state.bonds.filter(b=>{
     const t=state.tenancies.find(x=>x.id===b.tenancy_id),d=t?.check_out||t?.confirmed_until;
     return b.received&&!b.refunded&&d&&d<=horizon;
@@ -458,7 +512,7 @@ function overviewPage(){
   <div class="alert-grid">
     <div class="alert-card"><span class="muted small">Arrivals · next 7 days</span><strong>${arrivals.length}</strong><div class="small">${arrivals.slice(0,3).map(t=>`${fmtDate(t.check_in)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Departures · next 7 days</span><strong>${departures.length}</strong><div class="small">${departures.slice(0,3).map(t=>`${fmtDate(t.check_out||t.confirmed_until)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
-    <div class="alert-card"><span class="muted small">Rent overdue / due today</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(t=>`${esc(tenantBy(t.tenant_id)?.name||'')} · ${fmtDate(nextRentDue(t))}`).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Rent overdue / due today</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(t=>`${esc(paymentGroupName(t))} · ${fmtDate(nextRentDue(t))}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(t?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None'}</div></div>
   </div>
   <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current property only</span></div><div class="room-grid">${cards}</div></section>
@@ -541,9 +595,9 @@ function availabilityPage(){
 }
 function paymentsPage(){
   const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.payments.filter(p=>ids.has(p.tenancy_id)).sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
-  const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&nextRentDue(t)).sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
-  return `<section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Rent is due on the first day of each rental period. A payment covering that period clears the overdue flag.</div></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>`<tr><td>${esc(tenantBy(t.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t.room_id))}</td><td>${t.payment_cycle_weeks||'—'} wk</td><td>${fmtDate(nextRentDue(t))}</td><td>${t.rent_period==='week'&&t.payment_cycle_weeks?money(Number(t.rent_amount||0)*Number(t.payment_cycle_weeks)):money(t.rent_amount)}</td><td>${rentState(t)==='overdue'?`<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`:rentState(t)==='due today'?'<span class="danger-text">Due today</span>':esc(rentState(t))}</td></tr>`).join('')}</tbody></table></div></section>
+  const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&nextRentDue(t)&&isPaymentGroupPrimary(t)).sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
+  return `<section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Same room + same check-in share one payment group. Any group member's paid period covers everyone in the group. Amounts are shown once per group.</div></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>{const members=scheduleGroupMembers(t);const cycle=members.map(x=>x.payment_cycle_weeks).find(Boolean)||t.payment_cycle_weeks||'—';return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${cycle} wk</td><td>${fmtDate(nextRentDue(t))}</td><td>${money(paymentGroupExpectedAmount(t))}</td><td>${rentState(t)==='overdue'?`<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`:rentState(t)==='due today'?'<span class="danger-text">Due today</span>':esc(rentState(t))}</td></tr>`}).join('')}</tbody></table></div></section>
   <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${role()==='owner'?`<button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){

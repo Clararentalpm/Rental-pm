@@ -39,10 +39,10 @@ Scope: inspect uploaded V6.5.2 `index.html` + handoff docs only. **No applicatio
 
 | Issue | Impact |
 | --- | --- |
-| `property()` called on Income page but **never defined** (only `propertyBy`) | Income page likely throws and fails to render |
-| `deletePayment` DELETEs table `payments`, while reads/inserts use `rent_payments` | Owner payment delete likely fails |
-| Tenant live search selects `#main ...` but markup is `<main class="main">` (no `id="main"`) | Typing in search does not filter rows |
-| `deleteBond` mutates `state.bondPaymentEvents`, but `loadAll` stores that data as `state.bondEvents` | Possible runtime error after bond delete |
+| ~~`property()` undefined on Income~~ | **Fixed 2026-09-08** |
+| ~~Payment delete used table `payments`~~ | **Fixed 2026-09-08** → `rent_payments` |
+| ~~Tenant search used `#main`~~ | **Fixed 2026-09-08** → `#content` |
+| ~~`bondPaymentEvents` vs `bondEvents`~~ | **Fixed 2026-09-08** |
 | `activity_log` column inconsistency: payment delete uses `actor_user_id`; bond delete uses `user_id` | One of the audit writes may fail depending on schema |
 | New stay always creates a **new** tenant row | Duplicate tenant risk; no reuse/search of existing tenants |
 | No overlap validation on create/edit stay | Overlapping room bookings possible |

@@ -311,6 +311,7 @@ window.__bootTimer=setTimeout(()=>{if(!$('#boot').classList.contains('hidden'))f
 
 function roomBy(id){return state.rooms.find(r=>Number(r.id)===Number(id))}
 function propertyBy(id){return state.properties.find(p=>Number(p.id)===Number(id))}
+function property(){return propertyBy(state.propertyId)}
 function tenantBy(id){return state.tenants.find(t=>Number(t.id)===Number(id))}
 function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';return `${propertyBy(r.property_id)?.name||''} Room ${r.room_no}`}
 function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId))}
@@ -639,7 +640,7 @@ function render(){
   const tsrch=$('#tenant-search');if(tsrch)tsrch.oninput=e=>{
     state.tenantSearch=e.target.value;
     const q=state.tenantSearch.trim().toLowerCase();
-    $$('#main table tbody tr[data-tenant-search]').forEach(tr=>{
+    $$('#content table tbody tr[data-tenant-search]').forEach(tr=>{
       tr.style.display=!q||tr.dataset.tenantSearch.includes(q)?'':'none';
     });
   };
@@ -661,7 +662,7 @@ function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.inne
 async function deletePayment(id){
   if(role()!=='owner')return;
   const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount)}? This cannot be undone.`))return;
-  try{await insert('activity_log',{actor_user_id:getSession()?.user?.id||null,action:'delete_payment',entity_type:'payment',entity_id:String(id),details:{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date}});await api('payments',`id=eq.${id}`,{method:'DELETE'});toast('Payment deleted');await loadAll()}catch(e){alert(e.message)}
+  try{await insert('activity_log',{actor_user_id:getSession()?.user?.id||null,action:'delete_payment',entity_type:'payment',entity_id:String(id),details:{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date}});await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});toast('Payment deleted');await loadAll()}catch(e){alert(e.message)}
 }
 async function deleteBond(id){
   if(role()!=='owner'){alert('Owner permission is required to delete bond / deposit history.');return}
@@ -674,7 +675,7 @@ async function deleteBond(id){
     await api('bond_payment_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
     await api('bonds',`id=eq.${id}`,{method:'DELETE'});
     state.bondRefundEvents=state.bondRefundEvents.filter(x=>Number(x.bond_id)!==Number(id));
-    state.bondPaymentEvents=state.bondPaymentEvents.filter(x=>Number(x.bond_id)!==Number(id));
+    state.bondEvents=state.bondEvents.filter(x=>Number(x.bond_id)!==Number(id));
     state.bonds=state.bonds.filter(x=>Number(x.id)!==Number(id));
     toast('Bond / deposit history deleted');
     await loadAll();

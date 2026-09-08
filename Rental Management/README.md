@@ -23,5 +23,7 @@ python3 -m http.server 8080
 Open `http://localhost:8080/`. Sign in with an existing staff account. Do not seed or modify production Supabase data casually.
 
 ## Deploy
-Canonical host: `https://rental-pm-v2.netlify.app/`  
-Repo-root `netlify.toml` publishes this folder (`publish = "Rental Management"`).
+- **Current free host (GitHub Pages):** `https://clararentalpm.github.io/Rental-pm/`
+- Legacy Netlify host (deploys currently paused on that team): `https://rental-pm-v2.netlify.app/`
+- Repo-root `netlify.toml` still publishes this folder when Netlify deploys resume.
+- Invite/reset redirects use `CANONICAL_URL` in `index.html` (GitHub Pages). Add that URL in Supabase Auth redirect allow-list.

@@ -23,5 +23,6 @@ python3 -m http.server 8080
 Open `http://localhost:8080/`.
 
 ## Deploy
-`netlify.toml` at the repo root publishes the `Rental Management` folder.
-Canonical host: `https://rental-pm-v2.netlify.app/`
+- **GitHub Pages (current free URL):** `https://clararentalpm.github.io/Rental-pm/`
+- Workflow: `.github/workflows/deploy-pages.yml` publishes `Rental Management/`
+- Legacy Netlify: `netlify.toml` + `https://rental-pm-v2.netlify.app/` (team deploys may be paused)

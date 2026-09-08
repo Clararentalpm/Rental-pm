@@ -1,5 +1,10 @@
 # Changelog
 
+## Free GitHub Pages URL — 2026-09-08
+- Added GitHub Actions Pages deploy from `Rental Management/`.
+- Set app `CANONICAL_URL` to `https://clararentalpm.github.io/Rental-pm/` (Netlify team production deploys paused).
+- Legacy Netlify URL remains documented; no production rental data changed.
+
 ## Phase 1 final verification — 2026-09-08
 - Completed remaining Phase 1 verification without production data changes.
 - Confirmed the single automated FAIL is Netlify Edge Access (HTTP 401), not a client regression.

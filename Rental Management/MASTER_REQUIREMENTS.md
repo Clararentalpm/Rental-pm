@@ -273,10 +273,10 @@ Authorised sub-account users/managers should see:
 Roles:
 
 - **Owner/Admin** — full access
-- **Manager** — operational rental management access
+- **Manager** — operational rental management access (including record/delete rent payments)
 - **Viewer** — read-only where appropriate
 
-Do not give every account unrestricted destructive permissions.
+Do not give every account unrestricted destructive permissions. Bond history delete remains owner-only unless the owner later approves otherwise.
 
 ---
 

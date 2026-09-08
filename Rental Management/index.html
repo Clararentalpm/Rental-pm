@@ -113,6 +113,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <nav id="nav" class="nav">
       <button data-page="overview" class="active">Overview</button>
       <button data-page="tenants">Tenants</button>
+      <button data-page="viewings">Viewings</button>
       <button data-page="rooms">Room Profiles</button>
       <button data-page="availability">Availability</button>
       <button data-page="payments">Payments</button>
@@ -264,6 +265,31 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   <div class="dialog-actions"><button type="button" class="btn ghost" data-close="tenant-dialog">Cancel</button><button class="btn primary">Save tenant</button></div>
 </form></dialog>
 
+<dialog id="viewing-dialog"><form id="viewing-form" class="dialog-body">
+  <div class="dialog-head"><div><h2 id="viewing-dialog-title">Book room viewing</h2><div class="muted small">Inspection time to the minute. Intended stay is checked against room availability.</div></div><button type="button" class="close" data-close="viewing-dialog">×</button></div>
+  <input type="hidden" name="id" value="">
+  <div class="form-grid" style="margin-top:14px">
+    <label>Visitor name<input name="visitor_name" required placeholder="Prospective tenant"></label>
+    <label>Contact<input name="contact_method" placeholder="Phone / WeChat / Email"></label>
+    <label>Property<select name="property_id" required></select></label>
+    <label>Room<select name="room_id" required></select></label>
+    <label>Inspection date<input name="inspection_date" type="date" required></label>
+    <label>Inspection time<input name="inspection_time" type="time" required></label>
+    <label>People viewing<input name="people_count" type="number" min="1" value="1"></label>
+    <label>Need 加床 / extra bed?<select name="needs_extra_bed"><option value="false">No</option><option value="true">Yes</option></select></label>
+    <label>Intended check-in<input name="intended_check_in" type="date"></label>
+    <label>Intended check-out<input name="intended_check_out" type="date"></label>
+    <label>Intended stay type<select name="intended_tenancy_type"><option value="short_term">Short stay</option><option value="long_term">Long term</option></select></label>
+    <label>Deposit to secure room?<select name="deposit_paid"><option value="false">Not yet</option><option value="true">Yes — deposit paid</option></select></label>
+    <label>Deposit amount<input name="deposit_amount" type="number" step="0.01" placeholder="e.g. 200"></label>
+    <label>Deposit currency<select name="deposit_currency"><option value="AUD">AUD</option><option value="CNY">CNY (RMB)</option></select></label>
+  </div>
+  <div id="viewing-availability" class="note" style="margin-top:12px">Pick a room and intended dates to check availability.</div>
+  <label style="margin-top:12px">Notes<textarea name="notes" rows="3" placeholder="Who is coming, preferences, follow-up…"></textarea></label>
+  <div id="viewing-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="viewing-dialog">Cancel</button><button class="btn primary">Save viewing</button></div>
+</form></dialog>
+
 <dialog id="bond-action-dialog"><form id="bond-action-form" class="dialog-body">
   <div class="dialog-head"><div><h2>Bond / deposit action</h2><div id="bond-action-name" class="muted small"></div></div><button type="button" class="close" data-close="bond-action-dialog">×</button></div>
   <input type="hidden" name="bond_id">
@@ -303,7 +329,7 @@ const today=()=>new Date().toISOString().slice(0,10);
 const money=(v,c='AUD')=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('en-AU',{style:'currency',currency:c,maximumFractionDigits:0}).format(Number(v));
 const fmtDate=v=>v?new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(v+'T00:00:00')):'—';
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
-let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',me:null};
+let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',me:null};
 
 function getSession(){try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch{return null}}
 function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
@@ -599,11 +625,22 @@ async function loadAll(){
     select('room_price_history','select=*&order=created_at.desc'),
     select('activity_log','select=*&order=created_at.desc&limit=50'),
     select('bond_payment_events','select=*&order=created_at.desc'),
-    select('bond_refund_events','select=*&order=created_at.desc')
+    select('bond_refund_events','select=*&order=created_at.desc'),
+    select('room_viewings','select=*&order=inspection_date.desc,inspection_time.desc')
   ];
-  const keys=['properties','rooms','tenants','tenancies','bonds','payments','profiles','roomProfiles','priceHistory','activity','bondEvents','bondRefundEvents'];
+  const keys=['properties','rooms','tenants','tenancies','bonds','payments','profiles','roomProfiles','priceHistory','activity','bondEvents','bondRefundEvents','viewings'];
   const rs=await Promise.allSettled(req);let errs=[];
-  rs.forEach((r,i)=>{if(r.status==='fulfilled')state[keys[i]]=r.value||[];else errs.push(`${keys[i]}: ${r.reason.message}`)});
+  state.viewingsError='';
+  rs.forEach((r,i)=>{
+    if(r.status==='fulfilled')state[keys[i]]=r.value||[];
+    else{
+      errs.push(`${keys[i]}: ${r.reason.message}`);
+      if(keys[i]==='viewings'){
+        state.viewings=[];
+        state.viewingsError=r.reason.message||'room_viewings table missing';
+      }
+    }
+  });
   if(!state.properties.length)throw new Error(errs[0]||'No property data returned.');
   if(!state.propertyId||!state.properties.some(p=>Number(p.id)===Number(state.propertyId)))state.propertyId=state.properties[0].id;
   const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
@@ -621,7 +658,7 @@ function renderChrome(){
 }
 function setPage(p){
  state.page=p;
- const names={overview:'Overview',tenants:'Tenants',rooms:'Room Profiles',availability:'Availability',payments:'Payments',income:'Income',bonds:'Bond & Refund',pricing:'Price History',staff:'Staff Access',history:'History'};
+ const names={overview:'Overview',tenants:'Tenants',viewings:'Viewings',rooms:'Room Profiles',availability:'Availability',payments:'Payments',income:'Income',bonds:'Bond & Refund',pricing:'Price History',staff:'Staff Access',history:'History'};
  $('#title').textContent=names[p]||'Rental PM';
  $$('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));
  render();
@@ -781,11 +818,49 @@ function stayBlocksDate(t,date){
   const end=reservedEnd(t);
   return date>=t.check_in&&(!end||date<end);
 }
+function roomOccupiedOverlap(roomId,start,end){
+  if(!roomId||!start)return false;
+  const endEx=end||'9999-12-31';
+  return state.tenancies.some(t=>{
+    if(Number(t.room_id)!==Number(roomId)||!t.check_in)return false;
+    if(tenancyKind(t)==='historical'&&!(t.check_out||t.confirmed_until))return false;
+    const tEnd=reservedEnd(t)||'9999-12-31';
+    return start<tEnd&&endEx>t.check_in;
+  });
+}
+function roomAvailabilityNote(roomId,start,end){
+  if(!roomId)return 'Choose a room.';
+  if(!start)return 'Add intended check-in to check availability (optional but recommended).';
+  if(end&&end<=start)return 'Intended check-out must be after check-in.';
+  if(roomOccupiedOverlap(roomId,start,end)){
+    const r=roomBy(roomId);
+    return `${roomShortName(r)} looks occupied for ${fmtDate(start)}${end?` → ${fmtDate(end)}`:''}. Check Availability calendar before promising this room.`;
+  }
+  const r=roomBy(roomId);
+  return `${roomShortName(r)} appears available for ${fmtDate(start)}${end?` → ${fmtDate(end)}`:' (open-ended)'}.`;
+}
+function viewingKind(v){
+  if(!v)return 'past';
+  const st=String(v.status||'').toLowerCase();
+  if(st==='cancelled'||st==='canceled'||st==='completed')return 'past';
+  const d=v.inspection_date;if(!d)return 'past';
+  if(d<today())return 'past';
+  if(d===today())return 'current';
+  return 'upcoming';
+}
+function scopedViewings(){
+  return (state.viewings||[]).filter(v=>Number(v.property_id)===Number(state.propertyId));
+}
+function viewingPeopleLabel(v){
+  const n=Number(v.people_count||1);
+  return `${n} visitor${n===1?'':'s'}`;
+}
 function availabilityPage(){
   const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id))), ts=scopedTenancies().filter(t=>t.room_id===null||roomIds.has(Number(t.room_id)));
   const start=new Date(today()+'T00:00:00'), end=new Date(start);end.setDate(end.getDate()+89);
   const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
+  const viewingLink=canEdit()?`<button type="button" class="btn ghost" id="goto-book-viewing">+ Book viewing</button>`:'';
   if(state.availabilityMode==='vacancy'){
     const horizon=end.toISOString().slice(0,10);
     const cards=rooms.map(r=>{
@@ -798,9 +873,9 @@ function availabilityPage(){
       const futureIndef=all.find(t=>t.check_in>today()&&!t.check_out&&!t.confirmed_until);
       const finalEnd=futureIndef?.check_in||horizon;
       if(cursor<finalEnd)slots.push([cursor,finalEnd,futureIndef?.check_in_time||null]);
-      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}</div>`;
+      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn ghost book-viewing-room" data-room="${r.id}">Book viewing</button></div>`:''}</div>`;
     }).join('');
-    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded.</div></div>${switcher}</div>
+    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded. Use <b>Viewings</b> to book inspection times.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}</div></div>
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
       <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
   }
@@ -810,9 +885,34 @@ function availabilityPage(){
     const d=new Date(start);d.setDate(d.getDate()+i);const iso=d.toISOString().slice(0,10),dow=(d.getDay()+6)%7;
     const active=ts.filter(t=>t.check_in&&t.check_in<=iso&&(!(t.check_out||t.confirmed_until)||(t.check_out||t.confirmed_until)>=iso));
     const chips=active.map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?roomChipLabel(roomBy(t.room_id)):(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
-    cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||'<div class="muted small">Available</div>'}</div>`;
+    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>View</b> ${esc(v.visitor_name||'Visitor')} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
+    cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||''}${viewChips||''}${!(chips||viewChips)?'<div class="muted small">Available</div>':''}</div>`;
   }
-  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))}</div></div><div>${switcher}<div class="legend" style="margin-top:8px"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · purple chips = booked viewings</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}<div class="legend" style="margin-top:0"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
+}
+function viewingsPage(){
+  const filter=state.viewingFilter||'upcoming';
+  const prop=property();
+  const rows=scopedViewings()
+    .map(v=>({v,kind:viewingKind(v)}))
+    .filter(x=>filter==='all'||x.kind===filter)
+    .sort((a,b)=>{
+      const da=`${a.v.inspection_date||''}T${a.v.inspection_time||'00:00'}`,db=`${b.v.inspection_date||''}T${b.v.inspection_time||'00:00'}`;
+      return filter==='past'?db.localeCompare(da):da.localeCompare(db);
+    });
+  const setup=state.viewingsError?`<div class="error" style="margin-bottom:14px"><b>Viewings table not ready.</b> ${esc(state.viewingsError)}<div class="small" style="margin-top:8px">Owner: run SQL file <code>Rental Management/supabase_room_viewings.sql</code> in Supabase SQL Editor, then Refresh data.</div></div>`:'';
+  return `${setup}<section class="panel"><div class="panel-head"><div><h2>Room viewings / 看房</h2><div class="muted small"><b>${esc(prop?.name||'Property')}</b> — book inspection date &amp; time, room, intended stay (checked vs Availability), people count, 加床, deposit to secure room, notes.</div></div>${canEdit()&&!state.viewingsError?'<button id="add-viewing" class="btn primary">+ Book viewing</button>':''}</div>
+  <div class="tenant-tools"><div class="view-switch">${['upcoming','current','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-vfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><button type="button" class="btn ghost" id="goto-availability">Open Availability</button></div>
+  <div class="table-wrap"><table><thead><tr><th>When</th><th>Visitor</th><th>Room</th><th>People</th><th>加床</th><th>Intended stay</th><th>Deposit</th><th>Notes</th><th>Status</th><th>Action</th></tr></thead><tbody>
+  ${rows.map(({v,kind})=>{
+    const r=roomBy(v.room_id);
+    const nights=v.intended_nights||((v.intended_check_in&&v.intended_check_out)?Math.max(0,Math.round((new Date(v.intended_check_out+'T00:00:00')-new Date(v.intended_check_in+'T00:00:00'))/86400000)):null);
+    const stayLbl=v.intended_check_in?`${fmtDate(v.intended_check_in)}${v.intended_check_out?` → ${fmtDate(v.intended_check_out)}`:''}${nights!==null?`<div class="muted small">${nights} night${nights===1?'':'s'} · ${esc((v.intended_tenancy_type||'').replace('_',' ')||'stay')}</div>`:`<div class="muted small">${esc((v.intended_tenancy_type||'').replace('_',' ')||'')}</div>`}`:'—';
+    const dep=v.deposit_paid?`<b style="color:var(--green)">Paid</b>${v.deposit_amount?`<div class="muted small">${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</div>`:''}`:'<span class="muted">Not yet</span>';
+    const when=`${fmtDate(v.inspection_date)}${v.inspection_time?`<div class="muted small">${esc(String(v.inspection_time).slice(0,5))}</div>`:''}`;
+    return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(r?roomShortName(r):'—')}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(v.notes||'')}</td><td>${badge(kind)}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>${!v.deposit_paid?`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`:''}<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button></div>`:'—'}</td></tr>`;
+  }).join('')||`<tr><td colspan="10" class="muted">No ${esc(filter)} viewings for ${esc(prop?.name||'this property')}.</td></tr>`}
+  </tbody></table></div></section>`;
 }
 function paymentsPage(){
   const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.payments.filter(p=>ids.has(p.tenancy_id)).sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
@@ -917,6 +1017,7 @@ function render(){
     case 'payments': html=paymentsPage(); break;
     case 'bonds': html=bondsPage(); break;
     case 'tenants': html=tenantsPage(); break;
+    case 'viewings': html=viewingsPage(); break;
     case 'rooms': html=roomsPage(); break;
     case 'availability': html=availabilityPage(); break;
     case 'pricing': html=pricingPage(); break;
@@ -958,6 +1059,14 @@ function render(){
     });
   };
   $$('[data-tfilter]').forEach(b=>b.onclick=()=>{state.tenantFilter=b.dataset.tfilter;render()});
+  $$('[data-vfilter]').forEach(b=>b.onclick=()=>{state.viewingFilter=b.dataset.vfilter;render()});
+  const addViewing=$('#add-viewing');if(addViewing)addViewing.onclick=()=>openViewing();
+  const gotoAv=$('#goto-availability');if(gotoAv)gotoAv.onclick=()=>setPage('availability');
+  const gotoBook=$('#goto-book-viewing');if(gotoBook)gotoBook.onclick=()=>openViewing();
+  $$('.book-viewing-room').forEach(b=>b.onclick=()=>openViewing({roomId:Number(b.dataset.room)}));
+  $$('.edit-viewing').forEach(b=>b.onclick=()=>openEditViewing(Number(b.dataset.viewing)));
+  $$('.delete-viewing').forEach(b=>b.onclick=()=>deleteViewing(Number(b.dataset.viewing)));
+  $$('.mark-viewing-deposit').forEach(b=>b.onclick=()=>markViewingDeposit(Number(b.dataset.viewing)));
   $$('[data-imode]').forEach(b=>b.onclick=()=>{state.incomeMode=b.dataset.imode;render()});
   const inv=$('#invite-staff');if(inv)inv.onclick=()=>{document.querySelector('#invite-form').reset();$('#invite-note').classList.add('hidden');$('#invite-error').classList.add('hidden');$('#invite-dialog').showModal()};
   $$('.delete-staff').forEach(b=>b.onclick=()=>deleteStaff(b.dataset.user));
@@ -968,6 +1077,94 @@ function render(){
 
 function tenancyOptions(){
   return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
+}
+function fillViewingPropertyRooms(f,{propertyId,roomId}={}){
+  const pid=Number(propertyId||f.elements.property_id.value||state.propertyId);
+  f.elements.property_id.innerHTML=state.properties.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  f.elements.property_id.value=String(pid);
+  const rooms=state.rooms.filter(r=>Number(r.property_id)===pid).slice().sort((a,b)=>Number(a.room_no)-Number(b.room_no));
+  f.elements.room_id.innerHTML=rooms.map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('')||'<option value="">No rooms</option>';
+  if(roomId&&rooms.some(r=>Number(r.id)===Number(roomId)))f.elements.room_id.value=String(roomId);
+  else if(rooms[0])f.elements.room_id.value=String(rooms[0].id);
+}
+function updateViewingAvailabilityHint(f){
+  const box=$('#viewing-availability');if(!box||!f)return;
+  const note=roomAvailabilityNote(f.elements.room_id.value,f.elements.intended_check_in.value||null,f.elements.intended_check_out.value||null);
+  const conflict=roomOccupiedOverlap(f.elements.room_id.value,f.elements.intended_check_in.value||null,f.elements.intended_check_out.value||null);
+  box.className=conflict?'error':'note';
+  box.style.marginTop='12px';
+  box.textContent=note;
+}
+function bindViewingFormLive(f){
+  const refresh=()=>updateViewingAvailabilityHint(f);
+  f.elements.property_id.onchange=()=>{fillViewingPropertyRooms(f,{propertyId:f.elements.property_id.value});refresh()};
+  f.elements.room_id.onchange=refresh;
+  f.elements.intended_check_in.onchange=refresh;
+  f.elements.intended_check_out.onchange=refresh;
+  refresh();
+}
+function openViewing(opts={}){
+  if(!canEdit())return;
+  if(state.viewingsError){alert('Create the room_viewings table first (see supabase_room_viewings.sql), then Refresh data.');return}
+  const f=$('#viewing-form');f.reset();f.elements.id.value='';
+  f.elements.people_count.value=1;
+  f.elements.needs_extra_bed.value='false';
+  f.elements.deposit_paid.value='false';
+  f.elements.deposit_currency.value='AUD';
+  f.elements.intended_tenancy_type.value='short_term';
+  f.elements.inspection_date.value=today();
+  f.elements.inspection_time.value='10:00';
+  fillViewingPropertyRooms(f,{propertyId:state.propertyId,roomId:opts.roomId});
+  bindViewingFormLive(f);
+  $('#viewing-dialog-title').textContent='Book room viewing';
+  $('#viewing-error').classList.add('hidden');
+  $('#viewing-dialog').showModal();
+}
+function openEditViewing(id){
+  if(!canEdit())return;
+  const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v)return;
+  const f=$('#viewing-form');f.reset();
+  f.elements.id.value=String(v.id);
+  fillViewingPropertyRooms(f,{propertyId:v.property_id||state.propertyId,roomId:v.room_id});
+  f.elements.visitor_name.value=v.visitor_name||'';
+  f.elements.contact_method.value=v.contact_method||'';
+  f.elements.inspection_date.value=v.inspection_date||'';
+  f.elements.inspection_time.value=(v.inspection_time||'').slice(0,5);
+  f.elements.people_count.value=v.people_count||1;
+  f.elements.needs_extra_bed.value=v.needs_extra_bed?'true':'false';
+  f.elements.intended_check_in.value=v.intended_check_in||'';
+  f.elements.intended_check_out.value=v.intended_check_out||'';
+  f.elements.intended_tenancy_type.value=v.intended_tenancy_type||'short_term';
+  f.elements.deposit_paid.value=v.deposit_paid?'true':'false';
+  f.elements.deposit_amount.value=v.deposit_amount??'';
+  f.elements.deposit_currency.value=v.deposit_currency==='CNY'?'CNY':'AUD';
+  f.elements.notes.value=v.notes||'';
+  bindViewingFormLive(f);
+  $('#viewing-dialog-title').textContent='Edit room viewing';
+  $('#viewing-error').classList.add('hidden');
+  $('#viewing-dialog').showModal();
+}
+async function deleteViewing(id){
+  if(!canEdit())return;
+  const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v||!confirm(`Delete viewing for ${v.visitor_name}?`))return;
+  try{await api('room_viewings',`id=eq.${id}`,{method:'DELETE'});toast('Viewing deleted');await loadAll()}catch(e){alert(e.message)}
+}
+async function markViewingDeposit(id){
+  if(!canEdit())return;
+  const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v)return;
+  const amount=prompt('Deposit amount paid to secure the room?',String(v.deposit_amount||''));
+  if(amount===null)return;
+  const currency=confirm('OK = AUD, Cancel = CNY (RMB)')?'AUD':'CNY';
+  try{
+    await patch('room_viewings',`id=eq.${id}`,{
+      deposit_paid:true,
+      deposit_amount:amount===''?null:Number(amount),
+      deposit_currency:currency,
+      updated_at:new Date().toISOString()
+    });
+    toast('Deposit marked paid');
+    await loadAll();
+  }catch(e){alert(e.message)}
 }
 function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('');$('#stay-dialog').showModal()}
 function applyPaymentPeriodDefaults(f,t,{force=false,fillAmount=false}={}){
@@ -1265,6 +1462,59 @@ $('#payment-form').onsubmit=async e=>{
 $('#bond-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-error');err.classList.add('hidden');
   try{await insert('bonds',{tenancy_id:Number(fd.get('tenancy_id')),amount:Number(fd.get('amount')),currency:fd.get('original_currency'),original_currency:fd.get('original_currency'),received:true,received_date:fd.get('received_date')||today(),refunded:false,bond_type:fd.get('bond_type'),received_via:fd.get('received_via')||null,notes:fd.get('notes')||null});f.reset();$('#bond-dialog').close();toast('Bond saved');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+};
+$('#viewing-form').onsubmit=async e=>{
+  e.preventDefault();if(!canEdit())return;
+  const f=e.currentTarget,fd=new FormData(f),err=$('#viewing-error');err.classList.add('hidden');
+  const roomId=Number(fd.get('room_id'));
+  const propertyId=Number(fd.get('property_id'));
+  const inspection_date=fd.get('inspection_date')||null;
+  let inspection_time=String(fd.get('inspection_time')||'').trim();
+  if(inspection_time&&inspection_time.length===5)inspection_time+=':00';
+  const intended_check_in=fd.get('intended_check_in')||null;
+  const intended_check_out=fd.get('intended_check_out')||null;
+  if(!fd.get('visitor_name')?.toString().trim()){err.textContent='Visitor name is required.';err.classList.remove('hidden');return}
+  if(!inspection_date||!inspection_time){err.textContent='Inspection date and time are required.';err.classList.remove('hidden');return}
+  if(intended_check_in&&intended_check_out&&intended_check_out<=intended_check_in){err.textContent='Intended check-out must be after check-in.';err.classList.remove('hidden');return}
+  if(intended_check_in&&roomOccupiedOverlap(roomId,intended_check_in,intended_check_out)){
+    if(!confirm(roomAvailabilityNote(roomId,intended_check_in,intended_check_out)+'\n\nSave this viewing anyway?'))return;
+  }
+  const nights=intended_check_in&&intended_check_out
+    ?Math.max(0,Math.round((new Date(intended_check_out+'T00:00:00')-new Date(intended_check_in+'T00:00:00'))/86400000))
+    :null;
+  const depositPaid=fd.get('deposit_paid')==='true';
+  const row={
+    property_id:propertyId,
+    room_id:roomId,
+    visitor_name:String(fd.get('visitor_name')).trim(),
+    contact_method:fd.get('contact_method')||null,
+    people_count:Number(fd.get('people_count')||1),
+    needs_extra_bed:fd.get('needs_extra_bed')==='true',
+    inspection_date,
+    inspection_time,
+    intended_check_in,
+    intended_check_out,
+    intended_tenancy_type:fd.get('intended_tenancy_type')||null,
+    intended_nights:nights,
+    deposit_paid:depositPaid,
+    deposit_amount:fd.get('deposit_amount')===''||fd.get('deposit_amount')==null?null:Number(fd.get('deposit_amount')),
+    deposit_currency:fd.get('deposit_currency')==='CNY'?'CNY':'AUD',
+    notes:fd.get('notes')||null,
+    status:'scheduled',
+    updated_at:new Date().toISOString()
+  };
+  const editId=Number(fd.get('id')||0);
+  try{
+    if(editId){
+      await patch('room_viewings',`id=eq.${editId}`,row);
+      toast('Viewing updated');
+    }else{
+      row.created_by=getSession()?.user?.id||null;
+      await insert('room_viewings',row);
+      toast('Viewing booked');
+    }
+    f.reset();f.elements.id.value='';$('#viewing-dialog').close();await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#room-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),id=Number(fd.get('room_id')),err=$('#room-error');err.classList.add('hidden');

@@ -113,7 +113,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <nav id="nav" class="nav">
       <button data-page="overview" class="active">Overview</button>
       <button data-page="tenants">Tenants</button>
-      <button data-page="viewings">Viewings</button>
+      <button data-page="viewings">Inspections</button>
       <button data-page="rooms">Room Profiles</button>
       <button data-page="availability">Availability</button>
       <button data-page="payments">Payments</button>
@@ -266,7 +266,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="viewing-dialog"><form id="viewing-form" class="dialog-body">
-  <div class="dialog-head"><div><h2 id="viewing-dialog-title">Book room viewing</h2><div class="muted small">Inspection time to the minute. Intended stay is checked against room availability.</div></div><button type="button" class="close" data-close="viewing-dialog">×</button></div>
+  <div class="dialog-head"><div><h2 id="viewing-dialog-title">Book room inspection</h2><div class="muted small">Inspection time to the minute. Intended stay is checked against room availability.</div></div><button type="button" class="close" data-close="viewing-dialog">×</button></div>
   <input type="hidden" name="id" value="">
   <div class="form-grid" style="margin-top:14px">
     <label>Visitor name<input name="visitor_name" required placeholder="Prospective tenant"></label>
@@ -275,7 +275,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <label>Room<select name="room_id" required></select></label>
     <label>Inspection date<input name="inspection_date" type="date" required></label>
     <label>Inspection time<input name="inspection_time" type="time" required></label>
-    <label>People viewing<input name="people_count" type="number" min="1" value="1"></label>
+    <label>People coming<input name="people_count" type="number" min="1" value="1"></label>
     <label>Need 加床 / extra bed?<select name="needs_extra_bed"><option value="false">No</option><option value="true">Yes</option></select></label>
     <label>Intended check-in<input name="intended_check_in" type="date"></label>
     <label>Intended check-out<input name="intended_check_out" type="date"></label>
@@ -287,7 +287,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   <div id="viewing-availability" class="note" style="margin-top:12px">Pick a room and intended dates to check availability.</div>
   <label style="margin-top:12px">Notes<textarea name="notes" rows="3" placeholder="Who is coming, preferences, follow-up…"></textarea></label>
   <div id="viewing-error" class="error hidden"></div>
-  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="viewing-dialog">Cancel</button><button class="btn primary">Save viewing</button></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="viewing-dialog">Cancel</button><button class="btn primary">Save inspection</button></div>
 </form></dialog>
 
 <dialog id="bond-action-dialog"><form id="bond-action-form" class="dialog-body">
@@ -658,7 +658,7 @@ function renderChrome(){
 }
 function setPage(p){
  state.page=p;
- const names={overview:'Overview',tenants:'Tenants',viewings:'Viewings',rooms:'Room Profiles',availability:'Availability',payments:'Payments',income:'Income',bonds:'Bond & Refund',pricing:'Price History',staff:'Staff Access',history:'History'};
+ const names={overview:'Overview',tenants:'Tenants',viewings:'Inspections',rooms:'Room Profiles',availability:'Availability',payments:'Payments',income:'Income',bonds:'Bond & Refund',pricing:'Price History',staff:'Staff Access',history:'History'};
  $('#title').textContent=names[p]||'Rental PM';
  $$('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));
  render();
@@ -860,7 +860,7 @@ function availabilityPage(){
   const start=new Date(today()+'T00:00:00'), end=new Date(start);end.setDate(end.getDate()+89);
   const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
-  const viewingLink=canEdit()?`<button type="button" class="btn ghost" id="goto-book-viewing">+ Book viewing</button>`:'';
+  const viewingLink=canEdit()?`<button type="button" class="btn ghost" id="goto-book-viewing">+ Book inspection</button>`:'';
   if(state.availabilityMode==='vacancy'){
     const horizon=end.toISOString().slice(0,10);
     const cards=rooms.map(r=>{
@@ -873,9 +873,9 @@ function availabilityPage(){
       const futureIndef=all.find(t=>t.check_in>today()&&!t.check_out&&!t.confirmed_until);
       const finalEnd=futureIndef?.check_in||horizon;
       if(cursor<finalEnd)slots.push([cursor,finalEnd,futureIndef?.check_in_time||null]);
-      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn ghost book-viewing-room" data-room="${r.id}">Book viewing</button></div>`:''}</div>`;
+      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn ghost book-viewing-room" data-room="${r.id}">Book inspection</button></div>`:''}</div>`;
     }).join('');
-    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded. Use <b>Viewings</b> to book inspection times.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}</div></div>
+    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded. Use <b>Inspections</b> to book times.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}</div></div>
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
       <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
   }
@@ -885,10 +885,10 @@ function availabilityPage(){
     const d=new Date(start);d.setDate(d.getDate()+i);const iso=d.toISOString().slice(0,10),dow=(d.getDay()+6)%7;
     const active=ts.filter(t=>t.check_in&&t.check_in<=iso&&(!(t.check_out||t.confirmed_until)||(t.check_out||t.confirmed_until)>=iso));
     const chips=active.map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?roomChipLabel(roomBy(t.room_id)):(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
-    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>View</b> ${esc(v.visitor_name||'Visitor')} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
+    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>Insp</b> ${esc(v.visitor_name||'Visitor')} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
     cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||''}${viewChips||''}${!(chips||viewChips)?'<div class="muted small">Available</div>':''}</div>`;
   }
-  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · purple chips = booked viewings</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}<div class="legend" style="margin-top:0"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · purple chips = booked inspections</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}<div class="legend" style="margin-top:0"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
 }
 function viewingsPage(){
   const filter=state.viewingFilter||'upcoming';
@@ -900,8 +900,8 @@ function viewingsPage(){
       const da=`${a.v.inspection_date||''}T${a.v.inspection_time||'00:00'}`,db=`${b.v.inspection_date||''}T${b.v.inspection_time||'00:00'}`;
       return filter==='past'?db.localeCompare(da):da.localeCompare(db);
     });
-  const setup=state.viewingsError?`<div class="error" style="margin-bottom:14px"><b>Viewings table not ready.</b> ${esc(state.viewingsError)}<div class="small" style="margin-top:8px">Owner: run SQL file <code>Rental Management/supabase_room_viewings.sql</code> in Supabase SQL Editor, then Refresh data.</div></div>`:'';
-  return `${setup}<section class="panel"><div class="panel-head"><div><h2>Room viewings / 看房</h2><div class="muted small"><b>${esc(prop?.name||'Property')}</b> — book inspection date &amp; time, room, intended stay (checked vs Availability), people count, 加床, deposit to secure room, notes.</div></div>${canEdit()&&!state.viewingsError?'<button id="add-viewing" class="btn primary">+ Book viewing</button>':''}</div>
+  const setup=state.viewingsError?`<div class="error" style="margin-bottom:14px"><b>Inspections table not ready.</b> ${esc(state.viewingsError)}<div class="small" style="margin-top:8px">Owner: run SQL file <code>Rental Management/supabase_room_viewings.sql</code> in Supabase SQL Editor, then Refresh.</div></div>`:'';
+  return `${setup}<section class="panel"><div class="panel-head"><div><h2>Room inspections / 看房</h2><div class="muted small"><b>${esc(prop?.name||'Property')}</b> — book inspection date &amp; time, room, intended stay (checked vs Availability), people count, 加床, deposit to secure room, notes.</div></div>${canEdit()&&!state.viewingsError?'<button id="add-viewing" class="btn primary">+ Book inspection</button>':''}</div>
   <div class="tenant-tools"><div class="view-switch">${['upcoming','current','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-vfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><button type="button" class="btn ghost" id="goto-availability">Open Availability</button></div>
   <div class="table-wrap"><table><thead><tr><th>When</th><th>Visitor</th><th>Room</th><th>People</th><th>加床</th><th>Intended stay</th><th>Deposit</th><th>Notes</th><th>Status</th><th>Action</th></tr></thead><tbody>
   ${rows.map(({v,kind})=>{
@@ -911,7 +911,7 @@ function viewingsPage(){
     const dep=v.deposit_paid?`<b style="color:var(--green)">Paid</b>${v.deposit_amount?`<div class="muted small">${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</div>`:''}`:'<span class="muted">Not yet</span>';
     const when=`${fmtDate(v.inspection_date)}${v.inspection_time?`<div class="muted small">${esc(String(v.inspection_time).slice(0,5))}</div>`:''}`;
     return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(r?roomShortName(r):'—')}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(v.notes||'')}</td><td>${badge(kind)}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>${!v.deposit_paid?`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`:''}<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button></div>`:'—'}</td></tr>`;
-  }).join('')||`<tr><td colspan="10" class="muted">No ${esc(filter)} viewings for ${esc(prop?.name||'this property')}.</td></tr>`}
+  }).join('')||`<tr><td colspan="10" class="muted">No ${esc(filter)} inspections for ${esc(prop?.name||'this property')}.</td></tr>`}
   </tbody></table></div></section>`;
 }
 function paymentsPage(){
@@ -1105,7 +1105,7 @@ function bindViewingFormLive(f){
 }
 function openViewing(opts={}){
   if(!canEdit())return;
-  if(state.viewingsError){alert('Create the room_viewings table first (see supabase_room_viewings.sql), then Refresh data.');return}
+  if(state.viewingsError){alert('Create the room_viewings table first (see supabase_room_viewings.sql), then Refresh.');return}
   const f=$('#viewing-form');f.reset();f.elements.id.value='';
   f.elements.people_count.value=1;
   f.elements.needs_extra_bed.value='false';
@@ -1116,7 +1116,7 @@ function openViewing(opts={}){
   f.elements.inspection_time.value='10:00';
   fillViewingPropertyRooms(f,{propertyId:state.propertyId,roomId:opts.roomId});
   bindViewingFormLive(f);
-  $('#viewing-dialog-title').textContent='Book room viewing';
+  $('#viewing-dialog-title').textContent='Book room inspection';
   $('#viewing-error').classList.add('hidden');
   $('#viewing-dialog').showModal();
 }
@@ -1140,14 +1140,14 @@ function openEditViewing(id){
   f.elements.deposit_currency.value=v.deposit_currency==='CNY'?'CNY':'AUD';
   f.elements.notes.value=v.notes||'';
   bindViewingFormLive(f);
-  $('#viewing-dialog-title').textContent='Edit room viewing';
+  $('#viewing-dialog-title').textContent='Edit room inspection';
   $('#viewing-error').classList.add('hidden');
   $('#viewing-dialog').showModal();
 }
 async function deleteViewing(id){
   if(!canEdit())return;
-  const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v||!confirm(`Delete viewing for ${v.visitor_name}?`))return;
-  try{await api('room_viewings',`id=eq.${id}`,{method:'DELETE'});toast('Viewing deleted');await loadAll()}catch(e){alert(e.message)}
+  const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v||!confirm(`Delete inspection for ${v.visitor_name}?`))return;
+  try{await api('room_viewings',`id=eq.${id}`,{method:'DELETE'});toast('Inspection deleted');await loadAll()}catch(e){alert(e.message)}
 }
 async function markViewingDeposit(id){
   if(!canEdit())return;
@@ -1477,7 +1477,7 @@ $('#viewing-form').onsubmit=async e=>{
   if(!inspection_date||!inspection_time){err.textContent='Inspection date and time are required.';err.classList.remove('hidden');return}
   if(intended_check_in&&intended_check_out&&intended_check_out<=intended_check_in){err.textContent='Intended check-out must be after check-in.';err.classList.remove('hidden');return}
   if(intended_check_in&&roomOccupiedOverlap(roomId,intended_check_in,intended_check_out)){
-    if(!confirm(roomAvailabilityNote(roomId,intended_check_in,intended_check_out)+'\n\nSave this viewing anyway?'))return;
+    if(!confirm(roomAvailabilityNote(roomId,intended_check_in,intended_check_out)+'\n\nSave this inspection anyway?'))return;
   }
   const nights=intended_check_in&&intended_check_out
     ?Math.max(0,Math.round((new Date(intended_check_out+'T00:00:00')-new Date(intended_check_in+'T00:00:00'))/86400000))
@@ -1507,11 +1507,11 @@ $('#viewing-form').onsubmit=async e=>{
   try{
     if(editId){
       await patch('room_viewings',`id=eq.${editId}`,row);
-      toast('Viewing updated');
+      toast('Inspection updated');
     }else{
       row.created_by=getSession()?.user?.id||null;
       await insert('room_viewings',row);
-      toast('Viewing booked');
+      toast('Inspection booked');
     }
     f.reset();f.elements.id.value='';$('#viewing-dialog').close();await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}

@@ -52,9 +52,11 @@ assert(sandbox.roomOccupiedOverlap(10,'2026-10-05','2026-10-08')===true,'Carinda
 assert(/appears available/.test(sandbox.roomAvailabilityNote(1,'2026-10-20','2026-10-25')),'availability note free');
 assert(/occupied/.test(sandbox.roomAvailabilityNote(1,'2026-10-05','2026-10-08')),'availability note occupied');
 
-assert(html.includes('data-page="viewings"'),'left-nav Viewings tab');
-assert(html.includes('id="viewing-dialog"'),'viewing dialog present');
-assert(html.includes("$('#viewing-form').onsubmit"),'viewing form submit wired');
+assert(html.includes('data-page="viewings"'),'left-nav Inspections tab');
+assert(html.includes('>Inspections</button>'),'Inspections nav label');
+assert(html.includes('id="viewing-dialog"'),'inspection dialog present');
+assert(html.includes("$('#viewing-form').onsubmit"),'inspection form submit wired');
+assert(html.includes('+ Book inspection'),'Book inspection CTA');
 assert(html.includes('supabase_room_viewings.sql'),'SQL setup hint in UI');
 assert(html.includes('needs_extra_bed'),'加床 field');
 assert(html.includes('deposit_paid'),'deposit to secure room field');

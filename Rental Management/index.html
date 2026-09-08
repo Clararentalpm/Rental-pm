@@ -33,7 +33,7 @@ label{display:grid;gap:6px;font-weight:700;font-size:12px}
 .content{padding:22px 26px 50px;display:grid;gap:18px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric,.panel{background:#fff;border:1px solid var(--line);border-radius:16px}.metric{padding:20px;box-shadow:0 3px 12px #1018280a;min-height:112px}.metric strong{letter-spacing:-.02em}.metric span{font-size:13px;color:var(--muted)}.metric strong{display:block;font-size:31px;margin:5px 0}.metric small{color:var(--muted)}
 .panel{padding:20px;box-shadow:0 4px 16px #1018280a}.panel+.panel{margin-top:2px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel-head h2{font-size:19px;margin:0}.seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{border:1px solid var(--line);background:#fff;padding:7px 10px;border-radius:9px;cursor:pointer}.seg button.active{background:var(--nav);color:#fff;border-color:var(--nav)}
 .room-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.room-card{border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 2px 8px #10182808}.room-head{display:flex;justify-content:space-between;align-items:center}.room-card h3{margin:0;font-size:18px}.occupant{font-size:20px;font-weight:850;margin:13px 0 4px}.subline{font-size:12px;color:var(--muted)}.nextline{margin-top:11px;padding-top:9px;border-top:1px solid var(--line);font-size:12px}.room-actions{display:flex;gap:6px;margin-top:12px}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef0f3;color:#4f5661;font-size:11px;text-transform:capitalize}.badge.active,.badge.paid{background:var(--greenSoft);color:var(--green)}.badge.upcoming{background:var(--accentSoft);color:#3853b8}.badge.ensuite{background:var(--amberSoft);color:var(--amber)}.badge.historical{background:#f0f1f3;color:#606773}.badge.current{background:var(--accentSoft);color:#3157a4}.badge.overdue{background:var(--redSoft);color:var(--red)}.badge.available{background:var(--greenSoft);color:var(--green)}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef0f3;color:#4f5661;font-size:11px;text-transform:capitalize}.badge.active,.badge.paid{background:var(--greenSoft);color:var(--green)}.badge.upcoming{background:var(--accentSoft);color:#3853b8}.badge.ensuite{background:var(--amberSoft);color:var(--amber)}.badge.historical{background:#f0f1f3;color:#606773}.badge.current{background:var(--accentSoft);color:#3157a4}.badge.overdue,.badge.unpaid{background:var(--redSoft);color:var(--red)}.badge.due_today{background:var(--redSoft);color:var(--red)}.badge.due_soon,.badge.awaiting_payment{background:var(--amberSoft);color:var(--amber)}.badge.available{background:var(--greenSoft);color:var(--green)}.badge.ok{background:var(--greenSoft);color:var(--green)}
 .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}th{background:#fafbfc;color:#59616d;font-size:11px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}
 .empty{padding:28px;text-align:center;color:var(--muted)}
 .calendar90{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:8px}
@@ -390,6 +390,61 @@ function expectedRentAmount(t){
 function paymentGroupExpectedAmount(t){
   return scheduleGroupMembers(t).reduce((s,x)=>s+expectedRentAmount(x),0);
 }
+function stayEndDate(t){return t?.check_out||t?.confirmed_until||null}
+function stayNights(t){
+  const end=stayEndDate(t);if(!t?.check_in||!end)return null;
+  return Math.max(0,Math.round((new Date(end+'T00:00:00')-new Date(t.check_in+'T00:00:00'))/86400000));
+}
+/**
+ * One-off / short-stay payment model (owner-confirmed):
+ * Short stay, day/night/total rent, or stay ≤ ~4 weeks with an end date
+ * is usually paid once — do not invent the next weekly cycle.
+ * Instalments are the exception → awaiting payment / unpaid / overdue + Action reminder.
+ */
+function isOneOffStay(t){
+  if(!t)return false;
+  if(['day','night','total'].includes(String(t.rent_period||'')))return true;
+  if(String(t.tenancy_type||'')==='short_term')return true;
+  // Explicit long-term keeps weekly / cycle billing even with a near check-out.
+  if(String(t.tenancy_type||'')==='long_term')return false;
+  const nights=stayNights(t);
+  return nights!==null&&nights>0&&nights<=28;
+}
+function expectedStayTotalSolo(t){
+  const amt=Number(t.rent_amount||0);
+  if(t.rent_period==='total')return amt;
+  const nights=stayNights(t);
+  if(t.rent_period==='day'||t.rent_period==='night')return amt*Math.max(1,nights||1);
+  if(nights!==null){
+    const weeks=Math.max(1,Math.ceil(nights/7));
+    return amt*weeks;
+  }
+  return expectedRentAmount(t);
+}
+function expectedStayTotal(t){
+  return paymentGroupMembers(t).reduce((s,x)=>s+expectedStayTotalSolo(x),0);
+}
+function groupPaymentAmount(t){
+  const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
+  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
+    .reduce((s,p)=>s+Number(p.amount||0),0);
+}
+function stayBalanceDue(t){return Math.max(0,Number((expectedStayTotal(t)-groupPaymentAmount(t)).toFixed(2)))}
+function isStayFullyPaid(t){
+  const expected=expectedStayTotal(t);
+  if(expected<=0){
+    // No priced total — fall back to period coverage through stay end / today.
+    const through=paidThrough(t),end=stayEndDate(t);
+    if(through&&end&&through>=addDays(end,-1))return true;
+    if(through&&through>=today())return true;
+    return false;
+  }
+  return groupPaymentAmount(t)+0.009>=expected;
+}
+function paymentDueAmount(t){
+  if(isOneOffStay(t))return stayBalanceDue(t);
+  return paymentGroupExpectedAmount(t);
+}
 /** Count toward paid-through / rent-due unless explicitly unpaid/void. */
 function isCountedPayment(p){
   const s=String(p?.status??'paid').toLowerCase().trim();
@@ -410,6 +465,10 @@ function paidThrough(t){
 }
 function nextRentDue(t){
   if(!t.check_in)return null;
+  if(isOneOffStay(t)){
+    if(isStayFullyPaid(t))return null; // no further cycle expected
+    return t.check_in; // pay by arrival / stay start (instalments keep this due anchor)
+  }
   if(t.status==='upcoming'&&t.check_in>today())return t.check_in;
   const through=paidThrough(t);
   if(through)return addDays(through,1);
@@ -418,6 +477,12 @@ function nextRentDue(t){
 /** Suggested covered period for the next unpaid cycle (period_end advances rent-due). */
 function suggestPaymentPeriod(t){
   if(!t)return {start:today(),end:today(),amount:0};
+  if(isOneOffStay(t)){
+    const start=t.check_in||today();
+    const end=stayEndDate(t)||start;
+    const remaining=stayBalanceDue(t);
+    return {start,end,amount:remaining>0?remaining:expectedStayTotal(t)};
+  }
   const start=nextRentDue(t)||t.check_in||today();
   let end=start;
   if(t.rent_period==='day'||t.rent_period==='night')end=start;
@@ -428,10 +493,24 @@ function suggestPaymentPeriod(t){
   }
   return {start,end,amount:paymentGroupExpectedAmount(t)};
 }
+function oneOffRentState(t){
+  if(isStayFullyPaid(t))return 'paid';
+  const paid=groupPaymentAmount(t);
+  const due=t.check_in||today();
+  const delta=Math.floor((new Date(due+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
+  if(paid>0){
+    // Instalment / partial — still owe balance
+    if(delta<0)return 'overdue';
+    return 'awaiting payment';
+  }
+  if(delta<0)return 'overdue';
+  if(delta===0)return 'unpaid';
+  return 'awaiting payment';
+}
 function rentState(t){
-  if(t.status==='upcoming'&&t.check_in>today())return 'upcoming';
   if(t.check_out&&t.check_out<=today())return 'completed';
   if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return 'completed';
+  if(isOneOffStay(t))return oneOffRentState(t);
   const through=paidThrough(t);
   // Covered through today (inclusive) => paid — must win over due soon/today of the *next* cycle.
   if(through&&through>=today())return 'paid';
@@ -442,9 +521,13 @@ function rentState(t){
   if(delta<=3)return 'due soon';
   return 'ok';
 }
+function needsPaymentAction(t){
+  return ['unpaid','overdue','awaiting payment','due today'].includes(rentState(t));
+}
 function overdueDays(t){
   if(rentState(t)!=='overdue')return 0;
-  return Math.max(0,Math.floor((new Date(today()+'T00:00:00')-new Date(nextRentDue(t)+'T00:00:00'))/86400000));
+  const due=nextRentDue(t);if(!due)return 0;
+  return Math.max(0,Math.floor((new Date(today()+'T00:00:00')-new Date(due+'T00:00:00'))/86400000));
 }
 function tenancyKind(t){
   const d=today();
@@ -463,8 +546,11 @@ function tenantProfileRow(tenant){
   const stay=pick.t, kind=pick.kind, r=stay?roomBy(stay.room_id):null, p=r?propertyBy(r.property_id):null;
   return {tenant,stay,p,r,kind};
 }
-function badge(v){return `<span class="badge ${esc(v)}">${esc(v.replaceAll('_',' '))}</span>`}
-
+function badge(v){
+  const label=String(v??'').replaceAll('_',' ');
+  const cls=label.replaceAll(/\s+/g,'_');
+  return `<span class="badge ${esc(cls)}">${esc(label)}</span>`;
+}
 function addDays(iso,days){if(!iso)return null;const d=new Date(iso+'T00:00:00');d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)}
 function latestPaymentForTenancy(id){return state.payments.filter(p=>Number(p.tenancy_id)===Number(id)&&p.status!=='unpaid').sort((a,b)=>(b.period_end||b.received_date||'').localeCompare(a.period_end||a.received_date||''))[0]||null}
 
@@ -543,7 +629,7 @@ function overviewPage(){
   const horizon=addDays(today(),7);
   const arrivals=ts.filter(t=>t.check_in&&t.check_in>=today()&&t.check_in<=horizon&&tenancyKind(t)!=='historical');
   const departures=ts.filter(t=>{const d=t.check_out||t.confirmed_until;return d&&d>=today()&&d<=horizon});
-  const overdue=ts.filter(t=>['overdue','due today'].includes(rentState(t))&&isPaymentGroupPrimary(t));
+  const overdue=ts.filter(t=>needsPaymentAction(t)&&isPaymentGroupPrimary(t));
   const bondsToRefund=state.bonds.filter(b=>{
     const t=state.tenancies.find(x=>x.id===b.tenancy_id),d=t?.check_out||t?.confirmed_until;
     return b.received&&!b.refunded&&d&&d<=horizon;
@@ -571,7 +657,7 @@ function overviewPage(){
   <div class="alert-grid">
     <div class="alert-card"><span class="muted small">Arrivals · next 7 days</span><strong>${arrivals.length}</strong><div class="small">${arrivals.slice(0,3).map(t=>`${fmtDate(t.check_in)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Departures · next 7 days</span><strong>${departures.length}</strong><div class="small">${departures.slice(0,3).map(t=>`${fmtDate(t.check_out||t.confirmed_until)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
-    <div class="alert-card"><span class="muted small">Rent overdue / due today</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(t=>`${esc(paymentGroupName(t))} · ${fmtDate(nextRentDue(t))}`).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Payment action needed</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(t=>`${esc(paymentGroupName(t))} · ${esc(rentState(t))}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(t?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None'}</div></div>
   </div>
   <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current property only</span></div><div class="room-grid">${cards}</div></section>
@@ -582,7 +668,8 @@ function tenancyTable(rows,showActions=false){
   return `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Check-in</th><th>Until / Check-out</th><th>Rent</th><th>Next due</th><th>Bond</th><th>Status</th>${showActions?'<th>Actions</th>':''}</tr></thead><tbody>
   ${rows.sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')).map(t=>{
     const b=bondForTenancy(t.id),due=nextRentDue(t),rs=rentState(t);
-    return `<tr><td><b>${esc(tenantBy(t.tenant_id)?.name||'Tenant')}</b><div class="muted small">${esc(t.notes||'')}</div></td><td>${esc(roomLabel(t.room_id))}</td><td>${esc((t.tenancy_type||'').replace('_',' '))}</td><td>${fmtDate(t.check_in)}${t.check_in_time?`<div class="muted small">${esc(t.check_in_time.slice(0,5))}</div>`:''}</td><td>${fmtDate(t.check_out||t.confirmed_until)}</td><td>${money(t.rent_amount)} / ${esc(t.rent_period||'—')}<div class="muted small">${t.payment_cycle_weeks?`every ${t.payment_cycle_weeks} wk`:''}</div></td><td>${fmtDate(due)}${rs==='overdue'?`<div class="danger-text small">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</div>`:rs==='due today'?'<div class="small" style="color:var(--red);font-weight:800">Due today</div>':rs==='due soon'?'<div class="small" style="color:var(--amber)">Due soon</div>':''}</td><td>${b?`${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} remaining`:'—'}</td><td>${badge(tenancyKind(t))}</td>${showActions?`<td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${t.tenant_id}">Tenant</button><button class="btn ghost edit-tenancy" data-tenancy="${t.id}">Stay</button></div>`:'—'}</td>`:''}</tr>`;
+    const dueNote=rs==='overdue'?`<div class="danger-text small">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</div>`:rs==='due today'?'<div class="small" style="color:var(--red);font-weight:800">Due today</div>':rs==='due soon'?'<div class="small" style="color:var(--amber)">Due soon</div>':rs==='awaiting payment'?'<div class="small" style="color:var(--amber)">Awaiting payment</div>':rs==='unpaid'?'<div class="danger-text small">Unpaid</div>':rs==='paid'?'<div class="small" style="color:var(--green)">Paid</div>':'';
+    return `<tr><td><b>${esc(tenantBy(t.tenant_id)?.name||'Tenant')}</b><div class="muted small">${esc(t.notes||'')}</div></td><td>${esc(roomLabel(t.room_id))}</td><td>${esc((t.tenancy_type||'').replace('_',' '))}</td><td>${fmtDate(t.check_in)}${t.check_in_time?`<div class="muted small">${esc(t.check_in_time.slice(0,5))}</div>`:''}</td><td>${fmtDate(t.check_out||t.confirmed_until)}</td><td>${money(t.rent_amount)} / ${esc(t.rent_period||'—')}<div class="muted small">${isOneOffStay(t)?'one-off stay':(t.payment_cycle_weeks?`every ${t.payment_cycle_weeks} wk`:'')}</div></td><td>${due?fmtDate(due):'—'}${dueNote}</td><td>${b?`${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} remaining`:'—'}</td><td>${badge(tenancyKind(t))}</td>${showActions?`<td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${t.tenant_id}">Tenant</button><button class="btn ghost edit-tenancy" data-tenancy="${t.id}">Stay</button></div>`:'—'}</td>`:''}</tr>`;
   }).join('')}
   </tbody></table></div>`;
 }
@@ -672,9 +759,42 @@ function availabilityPage(){
 }
 function paymentsPage(){
   const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.payments.filter(p=>ids.has(p.tenancy_id)).sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
-  const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&nextRentDue(t)&&isPaymentGroupPrimary(t)).sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
-  return `<section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Same room + same check-in share one payment group. Any group member's paid period covers everyone in the group. Amounts are shown once per group.</div></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>{const members=scheduleGroupMembers(t);const cycle=members.map(x=>x.payment_cycle_weeks).find(Boolean)||t.payment_cycle_weeks||'—';return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${cycle} wk</td><td>${fmtDate(nextRentDue(t))}</td><td>${money(paymentGroupExpectedAmount(t))}</td><td>${rentState(t)==='overdue'?`<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`:rentState(t)==='due today'?'<span class="danger-text">Due today</span>':esc(rentState(t))}</td></tr>`}).join('')}</tbody></table></div></section>
+  const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&isPaymentGroupPrimary(t)&&(needsPaymentAction(t)||nextRentDue(t)||rentState(t)==='paid'))
+    .sort((a,b)=>{
+      const ra=needsPaymentAction(a)?0:1,rb=needsPaymentAction(b)?0:1;if(ra!==rb)return ra-rb;
+      return (nextRentDue(a)||'9999').localeCompare(nextRentDue(b)||'9999');
+    });
+  const actionRows=ts.filter(t=>tenancyKind(t)!=='historical'&&isPaymentGroupPrimary(t)&&needsPaymentAction(t))
+    .sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
+  const statusCell=t=>{
+    const rs=rentState(t);
+    if(rs==='overdue')return `<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`;
+    if(rs==='unpaid')return `<span class="danger-text">Unpaid</span>`;
+    if(rs==='awaiting payment')return `<span style="color:var(--amber);font-weight:750">Awaiting payment</span>`;
+    if(rs==='due today')return `<span class="danger-text">Due today</span>`;
+    if(rs==='paid')return `<span style="color:var(--green);font-weight:750">Paid</span>`;
+    return esc(rs);
+  };
+  const cycleLabel=t=>{
+    if(isOneOffStay(t)){
+      const n=stayNights(t);
+      return n!==null?`one-off · ${n} night${n===1?'':'s'}`:'one-off stay';
+    }
+    const members=scheduleGroupMembers(t);
+    const cycle=members.map(x=>x.payment_cycle_weeks).find(Boolean)||t.payment_cycle_weeks;
+    return cycle?`${cycle} wk`:'—';
+  };
+  const actionPanel=`<section class="panel"><div class="panel-head"><div><h2>Payment actions / reminders</h2><div class="muted small">Unpaid, overdue, awaiting payment (incl. short-stay instalments). Short stays (≤ ~4 weeks / confirmed end) are usually one payment — no next cycle after paid in full.</div></div><span class="muted small">${actionRows.length} open</span></div>
+  ${actionRows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Stay</th><th>Balance due</th><th>Due / anchor</th><th>Status</th><th>Action</th></tr></thead><tbody>${actionRows.map(t=>{
+    const end=stayEndDate(t);const paid=groupPaymentAmount(t);const expected=isOneOffStay(t)?expectedStayTotal(t):paymentGroupExpectedAmount(t);
+    return `<tr><td>${esc(paymentGroupName(t))}${isOneOffStay(t)&&paid>0&&!isStayFullyPaid(t)?`<div class="muted small">Instalment · paid ${money(paid)} of ${money(expected)}</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${fmtDate(t.check_in)} → ${end?fmtDate(end):'Ongoing'}<div class="muted small">${esc((t.tenancy_type||'').replace('_',' '))}${isOneOffStay(t)?' · one-off':''}</div></td><td><b>${money(paymentDueAmount(t))}</b></td><td>${fmtDate(nextRentDue(t))}</td><td>${statusCell(t)}</td><td>${canEdit()?`<button class="btn primary record-due-payment" data-tenancy="${t.id}">Record payment</button>`:'—'}</td></tr>`;
+  }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions right now.</div>'}</section>`;
+  return `${actionPanel}
+  <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group.</div></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>{
+    const members=scheduleGroupMembers(t);
+    return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
+  }).join('')||'<tr><td colspan="6" class="muted">No active rent schedule rows.</td></tr>'}</tbody></table></div></section>
   <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
@@ -755,6 +875,7 @@ function render(){
   $$('.edit-tenant').forEach(b=>b.onclick=()=>openTenant(Number(b.dataset.tenant)));
   $$('.edit-tenancy').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
   const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
+  $$('.record-due-payment').forEach(b=>b.onclick=()=>openPayment(Number(b.dataset.tenancy)));
   $$('.edit-payment').forEach(b=>b.onclick=()=>openEditPayment(Number(b.dataset.payment)));
   const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
   $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));

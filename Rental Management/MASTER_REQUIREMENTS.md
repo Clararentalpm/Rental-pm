@@ -232,6 +232,12 @@ Payment management should support:
 Payment records belong to the correct tenant/stay.  
 Do not delete rental history when a tenant leaves.
 
+### Short-stay / one-off payment rules (owner-confirmed 2026-09-08)
+
+1. Short stay, day/night/total rent, or a stay of about **4 weeks or less** with a confirmed end (`check_out` / `confirmed_until`) is usually **paid once** for the whole stay — do **not** invent the next weekly cycle after it is paid in full.
+2. If they pay in **instalments**, keep a balance due; status is **awaiting payment**, **unpaid**, or **overdue** until the stay total is covered.
+3. Payments page shows a **Payment actions / reminders** list for those statuses so staff can follow up and record the next instalment.
+
 ### Shared payment group rules (owner-confirmed 2026-09-08)
 
 1. Same room + same check-in date = one payment group (joint booking).

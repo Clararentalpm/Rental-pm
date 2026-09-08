@@ -6,6 +6,7 @@
 - **McGregor Room Profiles:** layout is Room 1–5 + **Sofa** as the 6th profile (Extra room, typically $25/day). If Sofa is missing, Room Profiles shows **+ Add Sofa unit**.
 - **Managers** can **Delete** rent payment records (same as owner) under Payments → Rent payments.
 - Payments: added **Edit**; Record/Edit auto-fills covered period from the next unpaid cycle; rent-due status treats coverage through today as **paid** (fixes stuck “due soon” when period/status did not count).
+- **Short-stay payment model:** stays ≤ ~4 weeks / short_term / day·night·total are one-off (no next cycle after paid in full). Instalments → **awaiting payment** / **unpaid** / **overdue** plus Payments **Action / reminders** panel.
 
 ## Extra room + 加床 fees — 2026-09-08
 - Reframed former “Extra sofa” as **Extra room** (sofa guest treated as extra room; typically $25/day).

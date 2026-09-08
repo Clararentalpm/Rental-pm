@@ -1,5 +1,10 @@
 # Changelog
 
+## Bond status buttons + Extra sofa fee — 2026-09-08
+- Bond register: added **Mark refunded** / **Mark not refunded** buttons (plus matching actions in Refund/deduct dialog).
+- Room Profiles: relabelled Extra bed fee → **Extra sofa fee ($/day)** and show Extra sofa on each room card.
+- Note on Room Profiles: McGregor sofa-guest rate typically **$25/day** (set via Edit profile → Extra sofa fee).
+
 ## Shared payment groups — 2026-09-08
 - Owner-confirmed rule: same `room_id` + same `check_in` date share one payment group.
 - Any paid `rent_payments` row for a group member covers the whole group (clears overdue for co-occupants).

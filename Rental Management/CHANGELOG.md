@@ -4,6 +4,7 @@
 - Top property tabs: added **+ Property** (owner/manager) to create a new property + starter rooms.
 - Tenants: checked-out stays (`check_out <= today`) count as **past**; Current uses any still-active stay, not only highest stay id.
 - **McGregor Room Profiles:** layout is Room 1–5 + **Sofa** as the 6th profile (Extra room, typically $25/day). If Sofa is missing, Room Profiles shows **+ Add Sofa unit**.
+- **Managers** can **Delete** rent payment records (same as owner) under Payments → Rent payments.
 
 ## Extra room + 加床 fees — 2026-09-08
 - Reframed former “Extra sofa” as **Extra room** (sofa guest treated as extra room; typically $25/day).

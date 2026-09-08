@@ -1,5 +1,13 @@
 # Changelog
 
+## Phase 1 final verification — 2026-09-08
+- Completed remaining Phase 1 verification without production data changes.
+- Confirmed the single automated FAIL is Netlify Edge Access (HTTP 401), not a client regression.
+- Confirmed `payments` table does not exist; `rent_payments` is correct.
+- Confirmed `activity_log.actor_user_id` does not exist; `user_id` is correct.
+- Mock-rendered Dashboard/Rooms/Tenants/Calendar/Payments/Bonds/Income/Search without regressions.
+- Phase 2 still blocked pending owner approval.
+
 ## Master requirements + Phase 1 gate — 2026-09-08
 - Saved authoritative brief as `MASTER_REQUIREMENTS.md`.
 - Phase 1 code complete; Phase 2 blocked until owner approves the Phase 1 test report.

@@ -37,19 +37,19 @@ Scope: inspect uploaded V6.5.2 `index.html` + handoff docs only. **No applicatio
 
 ## 3. Broken / incomplete features
 
-| Issue | Impact |
-| --- | --- |
-| `property()` called on Income page but **never defined** (only `propertyBy`) | Income page likely throws and fails to render |
-| `deletePayment` DELETEs table `payments`, while reads/inserts use `rent_payments` | Owner payment delete likely fails |
-| Tenant live search selects `#main ...` but markup is `<main class="main">` (no `id="main"`) | Typing in search does not filter rows |
-| `deleteBond` mutates `state.bondPaymentEvents`, but `loadAll` stores that data as `state.bondEvents` | Possible runtime error after bond delete |
-| `activity_log` column inconsistency: payment delete uses `actor_user_id`; bond delete uses `user_id` | One of the audit writes may fail depending on schema |
-| New stay always creates a **new** tenant row | Duplicate tenant risk; no reuse/search of existing tenants |
-| No overlap validation on create/edit stay | Overlapping room bookings possible |
-| `payment_cycle_weeks` not used by `nextRentDue` / `rentState` | Due dates advance by paid period end + 1 day only; cycle length may not match business expectation |
-| Viewer/manager role checks are **client-side only** | Any authenticated user can call REST directly unless RLS blocks them |
-| `netlify.toml` missing from handoff package | Deploy config not versioned in this repo |
-| Live URL returns Netlify **401 Edge Access / password gate** | Site not publicly reachable without Netlify login; may break invite/reset redirects for staff |
+| Issue | Impact | Status (2026-09-08 Phase 1) |
+| --- | --- | --- |
+| `property()` called on Income page but **never defined** (only `propertyBy`) | Income page likely throws and fails to render | **Fixed** — added `property()` |
+| `deletePayment` DELETEs table `payments`, while reads/inserts use `rent_payments` | Owner payment delete likely fails | **Fixed** — deletes `rent_payments` |
+| Tenant live search selects `#main ...` but markup is `<main class="main">` (no `id="main"`) | Typing in search does not filter rows | **Fixed** — selector uses `#content` |
+| `deleteBond` mutates `state.bondPaymentEvents`, but `loadAll` stores that data as `state.bondEvents` | Possible runtime error after bond delete | **Fixed** — uses `state.bondEvents` |
+| `activity_log` column inconsistency: payment delete uses `actor_user_id`; bond delete uses `user_id` | One of the audit writes may fail depending on schema | **Fixed** — payment audit uses `user_id`, best-effort |
+| New stay always creates a **new** tenant row | Duplicate tenant risk; no reuse/search of existing tenants | Open (Phase 2) |
+| No overlap validation on create/edit stay | Overlapping room bookings possible | Open (Phase 3) |
+| `payment_cycle_weeks` not used by `nextRentDue` / `rentState` | Due dates advance by paid period end + 1 day only; cycle length may not match business expectation | Open (confirm with owner) |
+| Viewer/manager role checks are **client-side only** | Any authenticated user can call REST directly unless RLS blocks them | Open (verify RLS) |
+| `netlify.toml` missing from handoff package | Deploy config not versioned in this repo | **Fixed** — restored minimal `netlify.toml` |
+| Live URL returns Netlify **401 Edge Access / password gate** | Site not publicly reachable without Netlify login; may break invite/reset redirects for staff | Open (hosting config) |
 
 ## 4. Supabase / auth / RLS / security risks
 

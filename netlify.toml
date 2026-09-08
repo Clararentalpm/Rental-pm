@@ -1,0 +1,11 @@
+# Rental PM V6.5.2 — static publish settings
+# Publish project root (index.html). Disable caching so staff always get fresh UI.
+# Do not add SPA catch-all redirects unless path-based routing is introduced.
+
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"

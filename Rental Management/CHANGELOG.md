@@ -1,9 +1,10 @@
 # Changelog
 
-## Room viewings / 看房 — 2026-09-08
-- Left nav **Viewings** tab (per property): book inspection **date + time**, room, intended stay length (checked against Availability), people count, 加床, deposit to secure room, notes.
-- Filters: **Upcoming / Current / Past / All**. Availability calendar shows viewing chips; Vacancy view can **Book viewing** for a room.
+## Room inspections / 看房 — 2026-09-08
+- Left nav **Inspections** tab (per property): book inspection **date + time**, room, intended stay length (checked against Availability), people count, 加床, deposit to secure room, notes.
+- Filters: **Upcoming / Current / Past / All**. Availability calendar shows inspection chips; Vacancy view can **Book inspection** for a room.
 - Requires one-time Supabase SQL: `Rental Management/supabase_room_viewings.sql` (table `room_viewings` + RLS).
+- UI wording uses **inspection** (not “viewing”).
 
 ## Tenants scoped by property tab — 2026-09-08
 - Tenant profiles list only tenants with a stay on the **currently selected property** (McGregor vs Carindale no longer mixed).

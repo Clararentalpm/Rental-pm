@@ -52,7 +52,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 @media(max-width:950px){.app{grid-template-columns:82px 1fr}.side-brand>div:last-child,.nav button{font-size:0}.nav button::first-letter{font-size:14px}.metrics{grid-template-columns:repeat(2,1fr)}.room-grid{grid-template-columns:repeat(2,1fr)}.price-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:950px){.alert-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:760px){.calendar90{grid-template-columns:repeat(7,minmax(125px,1fr));min-width:875px}.panel:has(.calendar90){overflow:auto}}
-@media(max-width:650px){body{font-size:16px}.content{gap:14px}.panel{padding:16px}.metric{min-height:auto}.btn{min-height:42px}.app{display:block}.sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:auto;height:auto;z-index:20;padding:7px}.side-brand,.side-bottom{display:none}.nav{grid-template-columns:repeat(4,1fr)}.nav button{font-size:10px!important;text-align:center;padding:8px 2px}.topbar{padding:14px;align-items:flex-start}.content{padding:14px 14px 88px}.metrics,.room-grid,.price-grid,.alert-grid,.form-grid{grid-template-columns:1fr}.actions .sync{display:none}}
+@media(max-width:650px){body{font-size:16px}.content{gap:14px}.panel{padding:16px}.metric{min-height:auto}.btn{min-height:42px}.app{display:block}.sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:auto;height:auto;z-index:20;padding:7px}.side-brand,.side-bottom{display:none}.nav{grid-template-columns:repeat(4,1fr)}.nav button{font-size:10px!important;text-align:center;padding:8px 2px}.topbar{padding:14px;align-items:flex-start}.content{padding:14px 14px 88px}.metrics,.room-grid,.price-grid,.alert-grid,.form-grid{grid-template-columns:1fr}.actions .sync{display:none}.actions #refresh-page{display:inline-flex}}
 </style>
 <style>
 .tenant-tools{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:16px 0;flex-wrap:wrap}.search-input{min-width:320px;max-width:580px;height:44px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:15px;background:#fff}.income-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:18px 0 24px}.income-kpis .metric{min-height:118px}.income-kpis .metric:first-child{border-top:4px solid var(--green)}table th{white-space:nowrap;background:#f8fafc}table td,table th{vertical-align:middle}.panel-head h2,.panel-head h3{margin:0}@media(max-width:1100px){.income-kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.income-kpis{grid-template-columns:1fr}.search-input{min-width:100%;width:100%}}
@@ -122,12 +122,12 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
       <button data-page="staff">Staff Access</button>
       <button data-page="history">History</button>
     </nav>
-    <div class="side-bottom"><button id="refresh" class="btn">Refresh</button><button id="logout" class="btn">Sign out</button></div>
+    <div class="side-bottom"><button id="refresh" class="btn" type="button" title="Reload data from database">Refresh data</button><button id="logout" class="btn" type="button">Sign out</button></div>
   </aside>
   <main class="main">
     <header class="topbar">
       <div><div id="property-tabs" class="tabs"></div><h1 id="title">Overview</h1></div>
-      <div class="actions"><span id="sync" class="sync">Ready</span><button id="new-stay" class="btn primary">+ New stay</button></div>
+      <div class="actions"><span id="sync" class="sync">Ready</span><button id="refresh-page" class="btn" type="button" title="Reload the webpage">Refresh page</button><button id="new-stay" class="btn primary">+ New stay</button></div>
     </header>
     <div id="content" class="content"></div>
   </main>
@@ -574,8 +574,10 @@ function bondRemaining(b){
   return Math.max(0,Number(b.amount||0)-refunded-deduct);
 }
 
-function role(){return state.me?.role||'viewer'}
+function role(){return String(state.me?.role||'viewer').toLowerCase().trim()}
 function canEdit(){return ['owner','manager'].includes(role())}
+/** Owner + manager/staff: record/edit/delete rent payments. */
+function canManagePayments(){return canEdit()}
 
 async function loadAll(){
   $('#sync').textContent='Syncing…';
@@ -834,7 +836,7 @@ function paymentsPage(){
   const actionPanel=`<section class="panel"><div class="panel-head"><div><h2>Payment actions / reminders</h2><div class="muted small">Unpaid, overdue, awaiting payment (incl. short-stay instalments). Short stays (≤ ~4 weeks / confirmed end) are usually one payment — no next cycle after paid in full.</div></div><span class="muted small">${actionRows.length} open</span></div>
   ${actionRows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Stay</th><th>Balance due</th><th>Due / anchor</th><th>Status</th><th>Action</th></tr></thead><tbody>${actionRows.map(t=>{
     const end=stayEndDate(t);const paid=groupPaymentAmount(t);const expected=isOneOffStay(t)?expectedStayTotal(t):paymentGroupExpectedAmount(t);
-    return `<tr><td>${esc(paymentGroupName(t))}${isOneOffStay(t)&&paid>0&&!isStayFullyPaid(t)?`<div class="muted small">Instalment · paid ${money(paid)} of ${money(expected)}</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${fmtDate(t.check_in)} → ${end?fmtDate(end):'Ongoing'}<div class="muted small">${esc((t.tenancy_type||'').replace('_',' '))}${isOneOffStay(t)?' · one-off':''}</div></td><td><b>${money(paymentDueAmount(t))}</b></td><td>${fmtDate(nextRentDue(t))}</td><td>${statusCell(t)}</td><td>${canEdit()?`<button class="btn primary record-due-payment" data-tenancy="${t.id}">Record payment</button>`:'—'}</td></tr>`;
+    return `<tr><td>${esc(paymentGroupName(t))}${isOneOffStay(t)&&paid>0&&!isStayFullyPaid(t)?`<div class="muted small">Instalment · paid ${money(paid)} of ${money(expected)}</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${fmtDate(t.check_in)} → ${end?fmtDate(end):'Ongoing'}<div class="muted small">${esc((t.tenancy_type||'').replace('_',' '))}${isOneOffStay(t)?' · one-off':''}</div></td><td><b>${money(paymentDueAmount(t))}</b></td><td>${fmtDate(nextRentDue(t))}</td><td>${statusCell(t)}</td><td>${canManagePayments()?`<button class="btn primary record-due-payment" data-tenancy="${t.id}">Record payment</button>`:'—'}</td></tr>`;
   }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions right now.</div>'}</section>`;
   return `${actionPanel}
   <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group.</div></div></div>
@@ -842,7 +844,7 @@ function paymentsPage(){
     const members=scheduleGroupMembers(t);
     return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
   }).join('')||'<tr><td colspan="6" class="muted">No active rent schedule rows.</td></tr>'}</tbody></table></div></section>
-  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotes(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
+  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canManagePayments()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotes(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canManagePayments()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete payment</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
  const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
@@ -968,7 +970,7 @@ function applyPaymentPeriodDefaults(f,t,{force=false,fillAmount=false}={}){
   if(fillAmount&&(force||!f.elements.amount.value))f.elements.amount.value=sug.amount||'';
 }
 function openPayment(tenancyId){
-  if(!canEdit())return;
+  if(!canManagePayments())return;
   const f=$('#payment-form');f.reset();f.elements.id.value='';
   f.elements.tenancy_id.innerHTML=tenancyOptions();
   if(tenancyId)f.elements.tenancy_id.value=String(tenancyId);
@@ -987,7 +989,7 @@ function openPayment(tenancyId){
   $('#payment-dialog').showModal();
 }
 function openEditPayment(id){
-  if(!canEdit())return;
+  if(!canManagePayments())return;
   const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p)return;
   const f=$('#payment-form');f.reset();
   f.elements.tenancy_id.innerHTML=tenancyOptions()+scopedTenancies().filter(t=>tenancyKind(t)==='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))} (past)</option>`).join('');
@@ -1019,7 +1021,7 @@ function openEditPayment(id){
 }
 function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
 async function deletePayment(id){
-  if(!canEdit())return;
+  if(!canManagePayments()){alert('Manager or owner permission is required to delete a payment.');return}
   const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount,paymentCurrency(p))}? This cannot be undone.`))return;
   try{
     await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});
@@ -1151,7 +1153,14 @@ $('#nav').onclick=e=>{
   e.preventDefault();e.stopPropagation();
   setPage(b.dataset.page);
 };
-$('#new-stay').onclick=openStay;$('#refresh').onclick=()=>loadAll().catch(e=>alert(e.message));$('#logout').onclick=()=>{clearSession();location.reload()};
+async function refreshData(){
+  try{await loadAll();toast('Data refreshed')}catch(e){alert(e.message)}
+}
+function refreshWebpage(){location.reload()}
+$('#new-stay').onclick=openStay;
+$('#refresh').onclick=()=>refreshData();
+const refreshPageBtn=$('#refresh-page');if(refreshPageBtn)refreshPageBtn.onclick=()=>refreshWebpage();
+$('#logout').onclick=()=>{clearSession();location.reload()};
 $$('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());
 
 function openAddProperty(){
@@ -1214,7 +1223,7 @@ $('#stay-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#payment-form').onsubmit=async e=>{
-  e.preventDefault();if(!canEdit())return;
+  e.preventDefault();if(!canManagePayments())return;
   const f=e.currentTarget,fd=new FormData(f),err=$('#payment-error');err.classList.add('hidden');
   const tid=Number(fd.get('tenancy_id'));
   const t=state.tenancies.find(x=>Number(x.id)===tid);

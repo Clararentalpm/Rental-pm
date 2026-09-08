@@ -1,5 +1,10 @@
 # Changelog
 
+## Staff payment delete + Refresh page — 2026-09-08
+- Payments Action column: **Delete payment** for owner/manager staff (clearer label + permission helper).
+- Top bar: **Refresh page** (full webpage reload), visible on mobile where sidebar Refresh is hidden.
+- Sidebar button relabelled **Refresh data** (re-sync from database).
+
 ## Add Property tab + Past tenant filter — 2026-09-08
 - Top property tabs: added **+ Property** (owner/manager) to create a new property + starter rooms.
 - Tenants: checked-out stays (`check_out <= today`) count as **past**; Current uses any still-active stay, not only highest stay id.

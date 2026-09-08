@@ -279,8 +279,12 @@ Authorised sub-account users/managers should see:
 Roles:
 
 - **Owner/Admin** — full access
-- **Manager** — operational rental management access (including record/delete rent payments)
+- **Manager** — operational rental management access (including record/edit/**delete rent payments**)
 - **Viewer** — read-only where appropriate
+
+Staff (manager) actions always available in the app chrome:
+- **Refresh data** (sidebar) — reload records from the database without signing out
+- **Refresh page** (top bar) — full webpage reload (also visible on mobile)
 
 Do not give every account unrestricted destructive permissions. Bond history delete remains owner-only unless the owner later approves otherwise.
 

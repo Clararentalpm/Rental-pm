@@ -4,9 +4,11 @@
 - Product: Rental PM
 - Working folder name: **Rental Management**
 - Base version: **V6.5.2**
+- Master requirements: `MASTER_REQUIREMENTS.md` (authoritative brief + phase gates)
 - Source in this folder: `index.html` (app). Deploy config: repo-root `netlify.toml` publishes this folder.
 - Treat this existing code as the authoritative starting point. Do **not** rebuild from scratch.
 - Future edits should stay inside `Rental Management/` unless deploy/root config must change.
+- Complete one phase, test, report, and wait for owner approval before the next phase.
 
 ## First instruction to Cursor
 Before changing code, inspect the full project and report:

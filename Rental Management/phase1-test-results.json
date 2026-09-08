@@ -1,0 +1,143 @@
+{
+  "generatedAt": "2026-09-08T05:06:03.760Z",
+  "phase": 1,
+  "passed": 26,
+  "failed": 1,
+  "results": [
+    {
+      "ok": true,
+      "name": "JS syntax parse",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "property() helper defined via propertyBy(state.propertyId)",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "Income page still calls property()",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "deletePayment targets rent_payments",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "no stale payments table delete",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "tenant search selector uses #content",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "no broken #main tenant search selector",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "deleteBond updates state.bondEvents",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "no bondPaymentEvents state key",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "activity_log uses user_id not actor_user_id",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "payment delete audit uses user_id best-effort",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "markup has main.main without id=main",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "content container id exists",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "tenant-search input is rendered by tenantsPage",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "loadAll state keys include payments and bondEvents",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "loadAll reads rent_payments",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "netlify.toml publishes Rental Management",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "netlify.toml disables caching",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "no SPA catch-all rewrite",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "property() returns current property name",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "tenant search substring filter logic",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "bondEvents filter after delete",
+      "detail": ""
+    },
+    {
+      "ok": true,
+      "name": "jsdom optional skipped",
+      "detail": "not installed; DOM boot checked via HTTP instead"
+    },
+    {
+      "ok": true,
+      "name": "static index.html serves with boot shell",
+      "detail": "HTTP 200"
+    },
+    {
+      "ok": true,
+      "name": "auth screen markup present (V6.5.2)",
+      "detail": ""
+    },
+    {
+      "ok": false,
+      "name": "live Netlify publicly reachable",
+      "detail": "HTTP 401 Edge Access / password gate"
+    },
+    {
+      "ok": true,
+      "name": "MASTER_REQUIREMENTS.md saved",
+      "detail": ""
+    }
+  ]
+}

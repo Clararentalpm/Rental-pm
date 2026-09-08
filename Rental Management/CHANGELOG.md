@@ -1,5 +1,9 @@
 # Changelog
 
+## Master requirements + Phase 1 gate — 2026-09-08
+- Saved authoritative brief as `MASTER_REQUIREMENTS.md`.
+- Phase 1 code complete; Phase 2 blocked until owner approves the Phase 1 test report.
+
 ## Project folder layout — 2026-09-08
 - Moved the working app into repo folder **`Rental Management/`** (future edits live here).
 - Kept `netlify.toml` at the repo root with `publish = "Rental Management"`.
@@ -10,7 +14,7 @@
 - Fixed Tenant live search selector to `#content` (markup has `<main class="main">`, not `id="main"`).
 - Fixed bond delete local state update to use `state.bondEvents` (matches `loadAll` key).
 - Aligned payment-delete audit with bond-delete: `activity_log.user_id`, best-effort so audit failure cannot block the delete.
-- Restored versioned `netlify.toml` (publish root + no-cache headers only; no SPA catch-all rewrite).
+- Restored versioned `netlify.toml` (publish folder + no-cache headers only; no SPA catch-all rewrite).
 
 ## Assessment — 2026-09-08
 - Restored authoritative V6.5.2 `index.html` and handoff docs into the GitHub repo (previously empty aside from README).

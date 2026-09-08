@@ -4,9 +4,14 @@
 **All future Rental PM changes should happen in this folder.**
 
 ## Start here
-1. Read [`CURSOR_CONTEXT.md`](CURSOR_CONTEXT.md)
-2. Read [`ASSESSMENT.md`](ASSESSMENT.md)
-3. Follow [`TODO.md`](TODO.md)
+1. Read [`MASTER_REQUIREMENTS.md`](MASTER_REQUIREMENTS.md) — authoritative product brief + phase gates
+2. Read [`CURSOR_CONTEXT.md`](CURSOR_CONTEXT.md)
+3. Read [`ASSESSMENT.md`](ASSESSMENT.md)
+4. Follow [`TODO.md`](TODO.md)
+
+## Phase status
+- **Phase 1 — Stabilise:** implemented; awaiting owner approval before Phase 2
+- Phase 2+ must not start until the owner approves the Phase 1 test report
 
 ## Run locally
 From this folder:

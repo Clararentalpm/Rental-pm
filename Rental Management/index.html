@@ -165,7 +165,8 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
-  <div class="dialog-head"><div><h2>Record rent payment</h2></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
+  <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
+  <input type="hidden" name="id" value="">
   <div class="form-grid" style="margin-top:14px">
     <label>Tenancy<select name="tenancy_id" required></select></label>
     <label>Amount<input name="amount" type="number" step="0.01" required></label>
@@ -389,15 +390,19 @@ function expectedRentAmount(t){
 function paymentGroupExpectedAmount(t){
   return scheduleGroupMembers(t).reduce((s,x)=>s+expectedRentAmount(x),0);
 }
+/** Count toward paid-through / rent-due unless explicitly unpaid/void. */
+function isCountedPayment(p){
+  const s=String(p?.status??'paid').toLowerCase().trim();
+  return s!=='unpaid'&&s!=='void'&&s!=='cancelled'&&s!=='canceled'&&s!=='refunded';
+}
 function tenancyPayments(t){
-  // Solo helper kept for clarity; group overdue uses groupTenancyPayments().
-  return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&String(p.status||'').toLowerCase()==='paid'&&p.period_start&&p.period_end)
-    .sort((a,b)=>String(a.period_start).localeCompare(String(b.period_start)));
+  return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&isCountedPayment(p)&&p.period_end)
+    .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
 function groupTenancyPayments(t){
   const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
-  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&String(p.status||'').toLowerCase()==='paid'&&p.period_start&&p.period_end)
-    .sort((a,b)=>String(a.period_start).localeCompare(String(b.period_start)));
+  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&p.period_end)
+    .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
 function paidThrough(t){
   const ps=groupTenancyPayments(t);if(!ps.length)return null;
@@ -410,15 +415,30 @@ function nextRentDue(t){
   if(through)return addDays(through,1);
   return t.check_in;
 }
+/** Suggested covered period for the next unpaid cycle (period_end advances rent-due). */
+function suggestPaymentPeriod(t){
+  if(!t)return {start:today(),end:today(),amount:0};
+  const start=nextRentDue(t)||t.check_in||today();
+  let end=start;
+  if(t.rent_period==='day'||t.rent_period==='night')end=start;
+  else if(t.rent_period==='total')end=t.check_out||t.confirmed_until||start;
+  else{
+    const w=Math.max(1,Number(t.payment_cycle_weeks||1));
+    end=addDays(start,w*7-1);
+  }
+  return {start,end,amount:paymentGroupExpectedAmount(t)};
+}
 function rentState(t){
   if(t.status==='upcoming'&&t.check_in>today())return 'upcoming';
   if(t.check_out&&t.check_out<=today())return 'completed';
   if(t.status==='historical'||t.status==='ended'||t.status==='inactive')return 'completed';
+  const through=paidThrough(t);
+  // Covered through today (inclusive) => paid — must win over due soon/today of the *next* cycle.
+  if(through&&through>=today())return 'paid';
   const due=nextRentDue(t);if(!due)return 'unknown';
   const delta=Math.floor((new Date(due+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
   if(delta<0)return 'overdue';
   if(delta===0)return 'due today';
-  if(paidThrough(t)&&paidThrough(t)>=today())return 'paid';
   if(delta<=3)return 'due soon';
   return 'ok';
 }
@@ -655,7 +675,7 @@ function paymentsPage(){
   const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&nextRentDue(t)&&isPaymentGroupPrimary(t)).sort((a,b)=>(nextRentDue(a)||'').localeCompare(nextRentDue(b)||''));
   return `<section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Same room + same check-in share one payment group. Any group member's paid period covers everyone in the group. Amounts are shown once per group.</div></div></div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRows.map(t=>{const members=scheduleGroupMembers(t);const cycle=members.map(x=>x.payment_cycle_weeks).find(Boolean)||t.payment_cycle_weeks||'—';return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${cycle} wk</td><td>${fmtDate(nextRentDue(t))}</td><td>${money(paymentGroupExpectedAmount(t))}</td><td>${rentState(t)==='overdue'?`<span class="danger-text">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</span>`:rentState(t)==='due today'?'<span class="danger-text">Due today</span>':esc(rentState(t))}</td></tr>`}).join('')}</tbody></table></div></section>
-  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${canEdit()?`<button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
+  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount)}</b></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(p.payment_method||'—')}</td><td>${badge(p.status||'recorded')}</td><td>${esc(p.notes||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
  const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
@@ -735,6 +755,7 @@ function render(){
   $$('.edit-tenant').forEach(b=>b.onclick=()=>openTenant(Number(b.dataset.tenant)));
   $$('.edit-tenancy').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
   const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
+  $$('.edit-payment').forEach(b=>b.onclick=()=>openEditPayment(Number(b.dataset.payment)));
   const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
   $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));
   $$('.bond-mark-refunded').forEach(b=>b.onclick=()=>setBondRefundedStatus(Number(b.dataset.bond),true));
@@ -771,7 +792,57 @@ function tenancyOptions(){
   return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
 }
 function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('');$('#stay-dialog').showModal()}
-function openPayment(){const f=$('#payment-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#payment-dialog').showModal()}
+function applyPaymentPeriodDefaults(f,t,{force=false,fillAmount=false}={}){
+  if(!t||!f)return;
+  const sug=suggestPaymentPeriod(t);
+  if(force||!f.elements.period_start.value)f.elements.period_start.value=sug.start;
+  if(force||!f.elements.period_end.value)f.elements.period_end.value=sug.end;
+  if(fillAmount&&(force||!f.elements.amount.value))f.elements.amount.value=sug.amount||'';
+}
+function openPayment(tenancyId){
+  if(!canEdit())return;
+  const f=$('#payment-form');f.reset();f.elements.id.value='';
+  f.elements.tenancy_id.innerHTML=tenancyOptions();
+  if(tenancyId)f.elements.tenancy_id.value=String(tenancyId);
+  f.elements.received_date.value=today();
+  const t=state.tenancies.find(x=>Number(x.id)===Number(f.elements.tenancy_id.value));
+  applyPaymentPeriodDefaults(f,t,{force:true,fillAmount:true});
+  $('#payment-dialog-title').textContent='Record rent payment';
+  $('#payment-error').classList.add('hidden');
+  f.elements.tenancy_id.onchange=()=>{
+    const tt=state.tenancies.find(x=>Number(x.id)===Number(f.elements.tenancy_id.value));
+    applyPaymentPeriodDefaults(f,tt,{force:true,fillAmount:true});
+  };
+  $('#payment-dialog').showModal();
+}
+function openEditPayment(id){
+  if(!canEdit())return;
+  const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p)return;
+  const f=$('#payment-form');f.reset();
+  f.elements.tenancy_id.innerHTML=tenancyOptions()+scopedTenancies().filter(t=>tenancyKind(t)==='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))} (past)</option>`).join('');
+  // Ensure current tenancy is listed even if filtered out
+  if(p.tenancy_id&&![...f.elements.tenancy_id.options].some(o=>Number(o.value)===Number(p.tenancy_id))){
+    const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
+    if(t)f.elements.tenancy_id.insertAdjacentHTML('beforeend',`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`);
+  }
+  f.elements.id.value=String(p.id);
+  f.elements.tenancy_id.value=String(p.tenancy_id??'');
+  f.elements.amount.value=p.amount??'';
+  f.elements.period_start.value=p.period_start||'';
+  f.elements.period_end.value=p.period_end||'';
+  f.elements.received_date.value=p.received_date||today();
+  f.elements.payment_method.value=p.payment_method||'';
+  f.elements.notes.value=p.notes||'';
+  // If period was missing (common cause of stuck "due soon"), offer the next cycle defaults without wiping amount.
+  if(!f.elements.period_end.value){
+    const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
+    applyPaymentPeriodDefaults(f,t,{force:true,fillAmount:false});
+  }
+  $('#payment-dialog-title').textContent='Edit rent payment';
+  $('#payment-error').classList.add('hidden');
+  f.elements.tenancy_id.onchange=null;
+  $('#payment-dialog').showModal();
+}
 function openBond(){const f=$('#bond-form');f.reset();f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
 async function deletePayment(id){
   if(!canEdit())return;
@@ -969,8 +1040,41 @@ $('#stay-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#payment-form').onsubmit=async e=>{
-  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#payment-error');err.classList.add('hidden');
-  try{await insert('rent_payments',{tenancy_id:Number(fd.get('tenancy_id')),amount:Number(fd.get('amount')),period_start:fd.get('period_start')||null,period_end:fd.get('period_end')||null,received_date:fd.get('received_date')||today(),status:'paid',payment_method:fd.get('payment_method')||null,notes:fd.get('notes')||null,recorded_by:getSession()?.user?.id||null});f.reset();$('#payment-dialog').close();toast('Payment recorded');await loadAll()}catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+  e.preventDefault();if(!canEdit())return;
+  const f=e.currentTarget,fd=new FormData(f),err=$('#payment-error');err.classList.add('hidden');
+  const tid=Number(fd.get('tenancy_id'));
+  const t=state.tenancies.find(x=>Number(x.id)===tid);
+  let period_start=fd.get('period_start')||null, period_end=fd.get('period_end')||null;
+  if((!period_start||!period_end)&&t){
+    const sug=suggestPaymentPeriod(t);
+    period_start=period_start||sug.start;
+    period_end=period_end||sug.end;
+  }
+  if(!period_end){err.textContent='Period end is required so Rent due status can update after payment.';err.classList.remove('hidden');return}
+  if(period_start&&period_end&&period_end<period_start){err.textContent='Period end must be on or after period start.';err.classList.remove('hidden');return}
+  const row={
+    tenancy_id:tid,
+    amount:Number(fd.get('amount')),
+    period_start,
+    period_end,
+    received_date:fd.get('received_date')||today(),
+    status:'paid',
+    payment_method:fd.get('payment_method')||null,
+    notes:fd.get('notes')||null,
+    recorded_by:getSession()?.user?.id||null
+  };
+  const editId=Number(fd.get('id')||0);
+  try{
+    if(editId){
+      const {recorded_by,...patchRow}=row;
+      await patch('rent_payments',`id=eq.${editId}`,patchRow);
+      toast('Payment updated');
+    }else{
+      await insert('rent_payments',row);
+      toast('Payment recorded');
+    }
+    f.reset();f.elements.id.value='';$('#payment-dialog').close();await loadAll();
+  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#bond-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-error');err.classList.add('hidden');

@@ -59,4 +59,12 @@ vicky.status='historical';
 assert('historical Vicky not in schedule group with 辣豆', sandbox.scheduleGroupMembers(lado).every(x=>Number(x.id)===10));
 assert('辣豆 still gets historical partner payments', sandbox.paidThrough(lado)==='2026-09-14');
 
+// Rent-due alignment after payment coverage
+assert('covered through future => paid (not due soon)', sandbox.rentState(lado)==='paid');
+S.payments.push({id:2,tenancy_id:12,amount:200,status:'recorded',period_end:'2099-01-01',received_date:'2026-09-01'});
+assert('status recorded still counts for paidThrough', sandbox.paidThrough(solo)==='2099-01-01');
+assert('solo rentState paid when covered', sandbox.rentState(solo)==='paid');
+const sug=sandbox.suggestPaymentPeriod(lado);
+assert('suggest period starts day after paid-through', sug.start==='2026-09-15');
+
 console.log(process.exitCode?'FAILED':'ALL PASSED');

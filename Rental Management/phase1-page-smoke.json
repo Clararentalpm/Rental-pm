@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-09-08T05:17:47.625Z",
+  "failed": 1,
+  "results": [
+    {
+      "name": "Dashboard",
+      "ok": true,
+      "bytes": 3734
+    },
+    {
+      "name": "Rooms",
+      "ok": true,
+      "bytes": 1140
+    },
+    {
+      "name": "Tenants",
+      "ok": true,
+      "bytes": 1315
+    },
+    {
+      "name": "Calendar",
+      "ok": true,
+      "bytes": 13598
+    },
+    {
+      "name": "Payments",
+      "ok": true,
+      "bytes": 1371
+    },
+    {
+      "name": "Bonds",
+      "ok": true,
+      "bytes": 837
+    },
+    {
+      "name": "Income",
+      "ok": true,
+      "bytes": 1823
+    },
+    {
+      "name": "Search",
+      "ok": true,
+      "bytes": 1320
+    },
+    {
+      "name": "AuthHelpers",
+      "ok": false,
+      "error": "{\"hasProperty\":true,\"hasSignIn\":true,\"hasStart\":false,\"hasParseRecovery\":false}"
+    }
+  ]
+}

@@ -73,6 +73,7 @@ assert('no-show label', sandbox.bookingStatusLabel(t)==='No-show');
 S.paymentActions=[{id:1,tenancy_id:100,tenant_id:1,room_id:2,property_id:1,due_date:'2020-01-01',amount:50,status:'waived'}];
 assert('waived not overdue counted', sandbox.isActionCountedInOverdue(S.paymentActions[0])===false);
 S.paymentActions=[{id:2,tenancy_id:100,tenant_id:1,room_id:2,property_id:1,due_date:'2020-01-01',amount:50,status:'open'}];
+t.status='upcoming'; t.rent_treatment=undefined; t.deposit_treatment=undefined;
 assert('open past due is overdue', sandbox.paymentActionLiveStatus(S.paymentActions[0])==='overdue');
 assert('superseded not overdue', sandbox.isActionCountedInOverdue({status:'superseded',due_date:'2020-01-01'})===false);
 
@@ -86,6 +87,18 @@ assert('cancel dialog markup', html.includes('id="cancel-booking-dialog"'));
 assert('payment action dialog markup', html.includes('id="payment-action-dialog"'));
 assert('sql migration file referenced', html.includes('supabase_payment_actions_cancel.sql'));
 assert('forfeit bond actions', html.includes('forfeit_full'));
+
+
+// TEST G: orphaned open action on cancelled booking must NOT count overdue
+t.status='cancelled';
+t.rent_treatment='not_payable';
+S.paymentActions=[{id:3,tenancy_id:100,tenant_id:1,room_id:2,property_id:1,due_date:'2020-01-01',amount:50,status:'open'}];
+assert('orphaned open on cancelled not overdue', sandbox.isActionCountedInOverdue(S.paymentActions[0])===false);
+assert('orphaned open on cancelled live=cancelled', sandbox.paymentActionLiveStatus(S.paymentActions[0])==='cancelled');
+
+// TEST H: forfeited deposit income classification string present (not rent)
+assert('forfeit classified as Forfeited Deposit Income', html.includes('Forfeited Deposit Income'));
+assert('no forfeit-to-rent_payments conversion path', !/forfeit[\s\S]{0,120}insert\('rent_payments'/.test(html));
 
 if(process.exitCode)console.log('cancel-forfeit-test FAILED');
 else console.log('cancel-forfeit-test passed');

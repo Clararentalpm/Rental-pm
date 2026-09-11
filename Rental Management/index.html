@@ -732,6 +732,9 @@ function actionFingerprint(t){
 function paymentActionLiveStatus(a){
   const st=String(a.status||'open').toLowerCase();
   if(['resolved','waived','cancelled','canceled','superseded'].includes(st))return st==='canceled'?'cancelled':st;
+  // Cancelled / no-show bookings must never inflate Overdue, even if an open row was left behind.
+  const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
+  if(t&&isCancelledOrNoShow(t)&&rentTreatment(t)!=='keep_due')return 'cancelled';
   if(!a.due_date)return 'open';
   const delta=Math.floor((new Date(a.due_date+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
   if(delta<0)return 'overdue';
@@ -2077,39 +2080,44 @@ $('#payment-action-form').onsubmit=async e=>{
     let id=fd.get('id');
     let existing=findActionById(id);
     if(!existing)throw new Error('Action not found');
+    const nextRow={
+      action_type:fd.get('action_type'),
+      status:fd.get('status'),
+      amount:fd.get('amount')===''?null:Number(fd.get('amount')),
+      due_date:fd.get('due_date')||null,
+      priority:fd.get('priority')||'normal',
+      related_bond_id:fd.get('related_bond_id')?Number(fd.get('related_bond_id')):null,
+      notes:fd.get('notes')||null,
+      last_modified_by:getSession()?.user?.id||null,
+      last_modified_at:new Date().toISOString()
+    };
+    if(['resolved','waived','cancelled','superseded'].includes(nextRow.status)){
+      nextRow.resolved_by=getSession()?.user?.id||null;
+      nextRow.resolved_at=new Date().toISOString();
+      nextRow.resolve_reason=fd.get('notes')||nextRow.status;
+    }
     if(existing.virtual||String(id).startsWith('virtual')||fd.get('virtual')==='1'){
-      existing=await ensurePersistedAction({
-        ...existing,
-        action_type:fd.get('action_type'),
-        status:fd.get('status'),
-        amount:fd.get('amount')===''?null:Number(fd.get('amount')),
-        due_date:fd.get('due_date')||null,
-        priority:fd.get('priority')||'normal',
-        related_bond_id:fd.get('related_bond_id')?Number(fd.get('related_bond_id')):null,
-        notes:fd.get('notes')||null
-      });
+      const before={...existing};
+      existing=await ensurePersistedAction({...existing,...nextRow});
       id=existing.id;
-    }else{
-      const patchRow={
-        action_type:fd.get('action_type'),
-        status:fd.get('status'),
-        amount:fd.get('amount')===''?null:Number(fd.get('amount')),
-        due_date:fd.get('due_date')||null,
-        priority:fd.get('priority')||'normal',
-        related_bond_id:fd.get('related_bond_id')?Number(fd.get('related_bond_id')):null,
-        notes:fd.get('notes')||null,
-        last_modified_by:getSession()?.user?.id||null,
-        last_modified_at:new Date().toISOString()
-      };
-      if(['resolved','waived','cancelled','superseded'].includes(patchRow.status)){
-        patchRow.resolved_by=getSession()?.user?.id||null;
-        patchRow.resolved_at=new Date().toISOString();
-        patchRow.resolve_reason=fd.get('notes')||patchRow.status;
-      }
+      await logActionHistory(id,'created','',`status ${nextRow.status||'open'}`,'Save Action');
       for(const k of ['action_type','status','amount','due_date','priority','notes']){
-        if(String(existing[k]??'')!==String(patchRow[k]??''))await logActionHistory(id,k,existing[k],patchRow[k],'Edit Action');
+        if(String(before[k]??'')!==String(nextRow[k]??''))await logActionHistory(id,k,before[k],nextRow[k],'Edit Action');
       }
-      await patch('payment_actions',`id=eq.${id}`,patchRow);
+      if(['resolved','waived','cancelled','superseded'].includes(String(nextRow.status||''))){
+        await patch('payment_actions',`id=eq.${id}`,{
+          resolve_reason:nextRow.resolve_reason||null,
+          resolved_by:nextRow.resolved_by||null,
+          resolved_at:nextRow.resolved_at||null,
+          last_modified_by:nextRow.last_modified_by||null,
+          last_modified_at:nextRow.last_modified_at||null
+        });
+      }
+    }else{
+      for(const k of ['action_type','status','amount','due_date','priority','notes']){
+        if(String(existing[k]??'')!==String(nextRow[k]??''))await logActionHistory(id,k,existing[k],nextRow[k],'Edit Action');
+      }
+      await patch('payment_actions',`id=eq.${id}`,nextRow);
     }
     $('#payment-action-dialog').close();toast('Payment action saved');await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}

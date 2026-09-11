@@ -1,7 +1,30 @@
 -- Payment Actions + Cancel / Forfeit support (NON-DESTRUCTIVE)
 -- Run ONLY after owner approval in Supabase SQL Editor.
 -- Do NOT run from agents against production automatically.
--- Safe to re-run: IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
+-- Safe to re-run: IF NOT EXISTS / ADD COLUMN IF NOT EXISTS / DROP POLICY IF EXISTS + recreate.
+--
+-- This migration:
+--   - Creates NEW tables only (empty)
+--   - Adds NULLABLE columns (or numeric default 0 that does NOT mean forfeited)
+--   - Does NOT UPDATE/DELETE existing tenant, tenancy, payment, bond, room, or audit rows
+--   - Does NOT DROP tables or truncate data
+--
+-- Rollback (data-safe structure removal) — run manually if needed:
+--   drop table if exists public.payment_action_history cascade;
+--   drop table if exists public.booking_financial_events cascade;
+--   drop table if exists public.payment_actions cascade;
+--   alter table public.tenancies drop column if exists cancelled_at;
+--   alter table public.tenancies drop column if exists cancelled_by;
+--   alter table public.tenancies drop column if exists cancellation_reason;
+--   alter table public.tenancies drop column if exists cancellation_notes;
+--   alter table public.tenancies drop column if exists deposit_treatment;
+--   alter table public.tenancies drop column if exists rent_treatment;
+--   alter table public.bonds drop column if exists forfeited_amount;
+--   alter table public.bonds drop column if exists forfeited_at;
+--   alter table public.bonds drop column if exists forfeited_by;
+--   alter table public.bonds drop column if exists forfeiture_reason;
+--   alter table public.bonds drop column if exists deposit_status;
+-- (Dropping columns removes only the new empty/default metadata; original bond amount/refund history remains.)
 
 -- ---------------------------------------------------------------------------
 -- 1) Tenancy booking cancellation / no-show fields
@@ -13,16 +36,20 @@ alter table public.tenancies add column if not exists cancellation_notes text;
 alter table public.tenancies add column if not exists deposit_treatment text;
 alter table public.tenancies add column if not exists rent_treatment text;
 -- status text already exists; app uses: upcoming|active|completed|cancelled|no_show|tbc|historical|ended
+-- Applying this migration does NOT change any existing status values.
 
 -- ---------------------------------------------------------------------------
 -- 2) Bond / deposit forfeiture fields (append-only events still preferred)
 -- ---------------------------------------------------------------------------
+-- default 0 means "no forfeit recorded yet" — NOT an automatic forfeiture classification.
+-- deposit_status stays NULL until staff explicitly forfeits/refunds in the app.
 alter table public.bonds add column if not exists forfeited_amount numeric default 0;
 alter table public.bonds add column if not exists forfeited_at date;
 alter table public.bonds add column if not exists forfeited_by uuid;
 alter table public.bonds add column if not exists forfeiture_reason text;
 alter table public.bonds add column if not exists deposit_status text;
 -- bond_type continues to distinguish rental_bond | deposit | booking_deposit | rent_advance | other
+-- No UPDATE of existing bond rows beyond adding null/default columns.
 
 -- ---------------------------------------------------------------------------
 -- 3) Persisted Payment Actions / Reminders (editable + traceable)
@@ -33,6 +60,7 @@ create table if not exists public.payment_actions (
   tenancy_id bigint references public.tenancies(id) on delete set null,
   tenant_id bigint references public.tenants(id) on delete set null,
   room_id bigint references public.rooms(id) on delete set null,
+  -- Intentionally no FK to rent_payments / bonds: names/ids vary; app stores ids when known.
   related_payment_id bigint,
   related_bond_id bigint,
   action_type text default 'rent_due',
@@ -59,21 +87,33 @@ create index if not exists payment_actions_property_idx on public.payment_action
 
 alter table public.payment_actions enable row level security;
 
-do $$
-begin
-  if not exists (
-    select 1 from pg_policies
-    where schemaname='public' and tablename='payment_actions' and policyname='payment_actions_auth_all'
-  ) then
-    create policy payment_actions_auth_all on public.payment_actions
-      for all to authenticated
-      using (true)
-      with check (true);
-  end if;
-end $$;
+-- Replace broad write-all policy with read for all authenticated + write for owner/manager only.
+drop policy if exists payment_actions_auth_all on public.payment_actions;
+drop policy if exists payment_actions_select_authenticated on public.payment_actions;
+drop policy if exists payment_actions_write_staff on public.payment_actions;
+
+create policy payment_actions_select_authenticated on public.payment_actions
+  for select to authenticated
+  using (true);
+
+create policy payment_actions_write_staff on public.payment_actions
+  for all to authenticated
+  using (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role in ('owner','manager')
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role in ('owner','manager')
+    )
+  );
 
 grant select, insert, update, delete on public.payment_actions to authenticated;
 grant usage, select on sequence public.payment_actions_id_seq to authenticated;
+-- Viewer: SELECT allowed by policy; INSERT/UPDATE/DELETE blocked by payment_actions_write_staff.
 
 -- ---------------------------------------------------------------------------
 -- 4) Payment action audit history (append-only)
@@ -94,24 +134,31 @@ create index if not exists payment_action_history_action_idx
 
 alter table public.payment_action_history enable row level security;
 
-do $$
-begin
-  if not exists (
-    select 1 from pg_policies
-    where schemaname='public' and tablename='payment_action_history' and policyname='payment_action_history_auth_all'
-  ) then
-    create policy payment_action_history_auth_all on public.payment_action_history
-      for all to authenticated
-      using (true)
-      with check (true);
-  end if;
-end $$;
+drop policy if exists payment_action_history_auth_all on public.payment_action_history;
+drop policy if exists payment_action_history_select_authenticated on public.payment_action_history;
+drop policy if exists payment_action_history_insert_staff on public.payment_action_history;
 
-grant select, insert, update, delete on public.payment_action_history to authenticated;
+create policy payment_action_history_select_authenticated on public.payment_action_history
+  for select to authenticated
+  using (true);
+
+create policy payment_action_history_insert_staff on public.payment_action_history
+  for insert to authenticated
+  with check (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role in ('owner','manager')
+    )
+  );
+
+-- Append-only: select + insert (no update/delete grant).
+revoke update, delete on public.payment_action_history from authenticated;
+grant select, insert on public.payment_action_history to authenticated;
 grant usage, select on sequence public.payment_action_history_id_seq to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 5) Booking / financial event log (append-only)
+-- Complements existing bond_refund_events (does not replace it).
 -- ---------------------------------------------------------------------------
 create table if not exists public.booking_financial_events (
   id bigserial primary key,
@@ -132,19 +179,23 @@ create index if not exists booking_financial_events_tenancy_idx
 
 alter table public.booking_financial_events enable row level security;
 
-do $$
-begin
-  if not exists (
-    select 1 from pg_policies
-    where schemaname='public' and tablename='booking_financial_events'
-      and policyname='booking_financial_events_auth_all'
-  ) then
-    create policy booking_financial_events_auth_all on public.booking_financial_events
-      for all to authenticated
-      using (true)
-      with check (true);
-  end if;
-end $$;
+drop policy if exists booking_financial_events_auth_all on public.booking_financial_events;
+drop policy if exists booking_financial_events_select_authenticated on public.booking_financial_events;
+drop policy if exists booking_financial_events_insert_staff on public.booking_financial_events;
 
-grant select, insert, update, delete on public.booking_financial_events to authenticated;
+create policy booking_financial_events_select_authenticated on public.booking_financial_events
+  for select to authenticated
+  using (true);
+
+create policy booking_financial_events_insert_staff on public.booking_financial_events
+  for insert to authenticated
+  with check (
+    exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid() and p.role in ('owner','manager')
+    )
+  );
+
+revoke update, delete on public.booking_financial_events from authenticated;
+grant select, insert on public.booking_financial_events to authenticated;
 grant usage, select on sequence public.booking_financial_events_id_seq to authenticated;

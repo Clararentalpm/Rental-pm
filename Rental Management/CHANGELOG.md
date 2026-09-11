@@ -1,5 +1,11 @@
 # Changelog
 
+## Payment actions + cancel / forfeit — 2026-09-11
+- Payment Actions / Reminders: Edit Action, Open Source Booking, Open Tenant, Mark Resolved, Waive, Cancel Booking, Forfeit Deposit, Record Refund, View History.
+- Cancelled / No-show bookings: future rent becomes Not Payable and is excluded from Overdue; availability dates reopen; history retained.
+- Deposit forfeiture (full/partial) with validation `refunded + forfeited ≤ original`; classification Forfeited Deposit Income via append-only events.
+- Draft SQL (manual owner approval only): `supabase_payment_actions_cancel.sql` — do **not** auto-run against production.
+
 ## Room inspections / 看房 — 2026-09-08
 - Left nav **Inspections** tab (per property): book inspection **date + time**, room, intended stay length (checked against Availability), people count, 加床, deposit to secure room, notes.
 - Filters: **Upcoming / Current / Past / All**. Availability calendar shows inspection chips; Vacancy view can **Book inspection** for a room.

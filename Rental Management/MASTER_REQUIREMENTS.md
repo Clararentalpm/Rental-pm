@@ -257,6 +257,26 @@ Do not delete rental history when a tenant leaves.
 2. If they pay in **instalments**, keep a balance due; status is **awaiting payment**, **unpaid**, or **overdue** until the stay total is covered.
 3. Payments page shows a **Payment actions / reminders** list for those statuses so staff can follow up and record the next instalment.
 
+### Payment actions + cancel / forfeit (owner-requested 2026-09-11)
+
+Payment Actions must be editable and traceable to the source booking/payment instruction.
+
+Required action menu: Edit Action · Open Source Booking · Open Tenant Profile · Mark Resolved · Waive Payment · Cancel Booking · Forfeit Deposit · Record Refund · View History.
+
+Statuses: Open · Due Soon · Overdue · Resolved · Waived · Cancelled · Superseded.
+
+When booking dates change, do **not** delete the old reminder — mark it **Superseded – Booking details changed** and create/recalculate the correct one. History must keep old value / new value / who / when / reason.
+
+Booking statuses: Upcoming · Active · Completed · Cancelled · No-show · TBC.
+
+Cancel Booking workflow captures cancellation date/reason/who, deposit treatment (full/partial refund, full/partial forfeit, no deposit), and outstanding rent treatment. Cancelled / No-show future rent that is not payable must **not** remain Overdue; related actions resolve as Resolved – Booking Cancelled / No-show. Availability dates reopen. Records are retained (never hard-deleted).
+
+Deposits: distinguish Booking Deposit / Rental Bond / Rent Advance / Other. Forfeit keeps original “deposit received” history and appends Forfeited / Retained (Forfeited Deposit Income). Partial forfeit: refunded + forfeited must never exceed original.
+
+Overdue dashboard totals count only money still genuinely payable — exclude Cancelled / Superseded / Waived / Resolved.
+
+DB: optional non-destructive migration `supabase_payment_actions_cancel.sql` (manual owner approval only — never auto-run on production).
+
 ### Shared payment group rules (owner-confirmed 2026-09-08)
 
 1. Same room + same check-in date = one payment group (joint booking).

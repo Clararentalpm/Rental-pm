@@ -40,7 +40,8 @@ Object.assign(S,{
     {id:3,tenancy_id:14,amount:150,status:'paid',period_start:'2026-09-01',period_end:'2026-09-07',received_date:'2026-09-01'}
   ],
   bonds:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],
-  me:{role:'owner'},page:'payments',view:'current',tenantSearch:'',tenantFilter:'current',availabilityMode:'calendar',incomeMode:'weekly'
+  paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',viewings:[],viewingsError:'',
+  me:{role:'owner'},page:'payments',view:'current',tenantSearch:'',tenantFilter:'current',availabilityMode:'calendar',incomeMode:'weekly',actionFilter:'open'
 });
 
 function assert(name,cond){if(!cond){console.log('FAIL',name);process.exitCode=1}else console.log('PASS',name)}

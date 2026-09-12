@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-09-08T05:15:52.503Z",
+  "generatedAt": "2026-09-11T12:03:51.368Z",
   "phase": 1,
-  "passed": 26,
-  "failed": 1,
+  "passed": 27,
+  "failed": 0,
   "results": [
     {
       "ok": true,
@@ -130,9 +130,9 @@
       "detail": ""
     },
     {
-      "ok": false,
+      "ok": true,
       "name": "live Netlify publicly reachable",
-      "detail": "HTTP 401 Edge Access / password gate"
+      "detail": ""
     },
     {
       "ok": true,

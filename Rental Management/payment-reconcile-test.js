@@ -139,6 +139,11 @@ assert('TEST D 425/35 not integer nights', !Number.isInteger(425/35));
 // Stale persisted action amount must not drive open display when live remaining differs
 S.paymentActions=[{id:4,tenancy_id:101,tenant_id:1,room_id:5,property_id:1,amount:425,due_date:'2026-09-11',status:'open',notes:''}];
 assert('TEST D display amount uses live remaining 175', sandbox.actionDisplayAmount(S.paymentActions[0])===175);
+// Stale ORIGINAL_AMOUNT note must also be ignored for short stays (booking is source of truth)
+S.paymentActions=[{id:4,tenancy_id:101,tenant_id:1,room_id:5,property_id:1,amount:425,due_date:'2026-09-11',status:'open',notes:'ORIGINAL_AMOUNT:425'}];
+assert('TEST D original ignores stale ORIGINAL_AMOUNT note', sandbox.actionOriginalAmount(S.paymentActions[0],laura)===175);
+assert('TEST D remaining ignores stale ORIGINAL_AMOUNT note', sandbox.actionRemainingAmount(S.paymentActions[0])===175);
+assert('TEST D display still 175 with stale ORIGINAL_AMOUNT', sandbox.actionDisplayAmount(S.paymentActions[0])===175);
 
 // ---------- TEST E: unknown future extension ----------
 seed();
@@ -201,11 +206,26 @@ assert('TEST E2 paid action resolved', sandbox.paymentActionLiveStatus(S.payment
 const nextDue=sandbox.nextRentDue(recurringT);
 assert('TEST E2 next due after paid-through exists', !!nextDue && nextDue>'2026-01-28');
 
+// ---------- TEST I: confident match of existing Cash payment; unpaid stays unpaid; no invent ----------
+seed();
+S.tenancies=[blackgun];
+S.paymentActions=[{id:12,tenancy_id:102,tenant_id:2,room_id:6,property_id:1,amount:75,due_date:'2026-09-11',status:'open',notes:'ORIGINAL_AMOUNT:75'}];
+S.payments=[];
+assert('TEST I no payment => remaining still 75', sandbox.actionRemainingAmount(S.paymentActions[0])===75);
+assert('TEST I no payment => live status not resolved', sandbox.paymentActionLiveStatus(S.paymentActions[0])!=='resolved');
+assert('TEST I no confident match without payment', sandbox.findConfidentExistingPayment(S.paymentActions[0])==null);
+S.payments=[{id:70,tenancy_id:102,amount:75,status:'paid',received_date:'2026-09-11',period_start:'2026-09-11',period_end:'2026-09-14',payment_method:'Cash',notes:'Cash on arrival'}];
+assert('TEST I finds existing Cash $75 confidently', Number(sandbox.findConfidentExistingPayment(S.paymentActions[0])?.id)===70);
+assert('TEST I existing cash covers remaining', sandbox.actionRemainingAmount(S.paymentActions[0])===0);
+assert('TEST I soft reconcile source does not insert payments', !/async function softReconcileOpenActions[\s\S]*?insert\(/.test(html.split('async function runPaymentActionReconcile')[0]) && !html.slice(html.indexOf('async function softReconcileOpenActions'), html.indexOf('async function runPaymentActionReconcile')).includes('insert('));
+
 // Markup / wiring
 assert('payment form has action id field', html.includes('name="payment_action_id"'));
 assert('payment form has idempotency field', html.includes('name="idempotency_key"'));
 assert('record button passes data-action', html.includes('data-action="${esc(a.id)}"')||html.includes('data-action="'));
 assert('soft reconcile on load', html.includes('softReconcileOpenActions'));
+assert('owner reconcile button present', html.includes('Reconcile Payment Actions')&&html.includes('reconcile-payment-actions'));
+assert('soft reconcile gated to editors', html.includes('if(!canEdit())return')||html.includes('if(canEdit()){try{await softReconcileOpenActions()'));
 assert('resolve reason Paid path', html.includes("resolve_reason='Paid'")||html.includes('resolve_reason:"Paid"')||html.includes("resolve_reason='Paid'")||html.includes('Paid'));
 assert('confirmation mentions Payment Action resolved', html.includes('Payment Action resolved'));
 assert('confirmation mentions remaining for partial', html.includes('remaining'));

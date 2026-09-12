@@ -787,9 +787,11 @@ function paymentsLinkedToAction(a){
   });
 }
 function actionOriginalAmount(a,t){
+  // Short / one-off stays: booking is always the source of truth.
+  // Ignore stale ORIGINAL_AMOUNT notes so derived actions recalculate from nights × rate.
+  if(t&&isOneOffStay(t))return expectedStayTotal(t);
   const meta=parseActionMeta(a?.notes);
   if(meta.originalAmount!=null)return meta.originalAmount;
-  if(t&&isOneOffStay(t))return expectedStayTotal(t);
   const paid=paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0);
   const amt=Number(a?.amount||0);
   // After a reconcile we store remaining in amount and ORIGINAL_AMOUNT in notes.
@@ -867,10 +869,11 @@ async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
   const outstandingBefore=actionRemainingBeforePayment(action,payment);
   let notes=action.notes||'';
   const meta=parseActionMeta(notes);
-  const original=meta.originalAmount!=null
-    ? meta.originalAmount
-    : (t&&isOneOffStay(t)
-      ? expectedStayTotal(t)
+  // One-off / short stays always recalculate from the current booking (never freeze stale ORIGINAL_AMOUNT).
+  const original=(t&&isOneOffStay(t))
+    ? expectedStayTotal(t)
+    : (meta.originalAmount!=null
+      ? meta.originalAmount
       : actionOriginalAmount(action,t) || Number(action.amount||0));
   const paymentIds=new Set(meta.paymentIds||[]);
   if(action.related_payment_id)paymentIds.add(Number(action.related_payment_id));
@@ -928,17 +931,115 @@ async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
   }
   return {...action,...patchRow,excess};
 }
+function explicitlyLinkedPaymentIds(a){
+  const meta=parseActionMeta(a?.notes);
+  const ids=new Set(meta.paymentIds||[]);
+  if(a?.related_payment_id)ids.add(Number(a.related_payment_id));
+  return ids;
+}
+/** Match an existing rent_payment to an open action without inventing a new payment. */
+function findConfidentExistingPayment(a){
+  const t=state.tenancies.find(x=>Number(x.id)===Number(a?.tenancy_id));
+  if(!t)return null;
+  const explicit=explicitlyLinkedPaymentIds(a);
+  const groupIds=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
+  const original=actionOriginalAmount(a,t);
+  const stayStart=t.check_in||null;
+  const stayEnd=stayEndDate(t);
+  const candidates=(state.payments||[]).filter(p=>{
+    if(!isCountedPayment(p))return false;
+    if(!groupIds.has(Number(p.tenancy_id)))return false;
+    if(explicit.has(Number(p.id)))return false;
+    const mark=String(p.notes||'').match(/ACTION_ID:([0-9]+)/);
+    if(mark&&Number(mark[1])!==Number(a.id)){
+      const other=(state.paymentActions||[]).find(x=>Number(x.id)===Number(mark[1]));
+      if(other&&!['resolved','waived','cancelled','canceled','superseded'].includes(String(other.status||'').toLowerCase()))return false;
+    }
+    const amt=Number(p.amount||0);
+    if(amt<=0)return false;
+    if(isOneOffStay(t)){
+      // Same stay/booking payment — amount may be full, partial, or slight overpay.
+      if(amt>original*2+0.009)return false;
+    }else{
+      const target=Math.max(Number(a.amount||0),original);
+      const ok=Math.abs(amt-original)<0.009||Math.abs(amt-Number(a.amount||0))<0.009||amt<=target+0.009;
+      if(!ok)return false;
+    }
+    const ps=p.period_start||null,pe=p.period_end||null;
+    if(isOneOffStay(t)){
+      if(ps&&stayEnd&&ps>stayEnd)return false;
+      if(pe&&stayStart&&pe<stayStart)return false;
+    }else if(a.due_date){
+      if(pe&&pe<addDays(a.due_date,-14))return false;
+      if(ps&&ps>addDays(a.due_date,60))return false;
+    }
+    return true;
+  });
+  if(!candidates.length)return null;
+  if(candidates.length===1)return candidates[0];
+  const rem=actionRemainingAmount(a);
+  const exactRem=candidates.filter(p=>Math.abs(Number(p.amount)-rem)<0.009);
+  if(exactRem.length===1)return exactRem[0];
+  const exactOrig=candidates.filter(p=>Math.abs(Number(p.amount)-original)<0.009);
+  if(exactOrig.length===1)return exactOrig[0];
+  const marked=candidates.filter(p=>String(p.notes||'').includes(`ACTION_ID:${a.id}`));
+  if(marked.length===1)return marked[0];
+  return null; // ambiguous — do not guess
+}
+/**
+ * NON-DESTRUCTIVE reconcile for Owner/Manager:
+ * - recalculate stale short-stay action amounts from the booking
+ * - link existing rent_payments when confidently matched
+ * - NEVER create a rent_payment
+ */
 async function softReconcileOpenActions(){
-  if(state.paymentActionsError)return;
+  if(state.paymentActionsError)return {updated:0,linked:0};
+  if(!canEdit())return {updated:0,linked:0};
   const open=(state.paymentActions||[]).filter(a=>['open','due_soon','overdue','partially_paid'].includes(String(a.status||'').toLowerCase()));
+  let updated=0,linked=0;
   for(const a of open){
+    const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
     const rem=actionRemainingAmount(a);
     const paid=actionPaidAmount(a);
-    // Only auto-write when clearly fully paid or amount/status drifted from live remaining.
-    if(rem<=0.009||(paid>0.009&&Number(a.amount)!==rem)||(paid>0.009&&String(a.status)!=='partially_paid'&&rem>0.009)){
-      try{await reconcilePaymentAction(a,{toastMsg:false})}catch(_){}
-    }
+    const meta=parseActionMeta(a.notes);
+    const liveOrig=t&&isOneOffStay(t)?expectedStayTotal(t):null;
+    const staleOrig=liveOrig!=null&&meta.originalAmount!=null&&Math.abs(Number(meta.originalAmount)-liveOrig)>0.009;
+    const amountDrift=Math.abs(Number(a.amount||0)-rem)>0.009;
+    const match=findConfidentExistingPayment(a);
+    const shouldWrite=rem<=0.009||amountDrift||staleOrig||!!match||
+      (paid>0.009&&String(a.status)!=='partially_paid'&&rem>0.009);
+    if(!shouldWrite)continue;
+    try{
+      const result=await reconcilePaymentAction(a,{payment:match||null,toastMsg:false});
+      if(result){
+        updated++;
+        if(match)linked++;
+        const idx=(state.paymentActions||[]).findIndex(x=>Number(x.id)===Number(a.id));
+        if(idx>=0)state.paymentActions[idx]={...state.paymentActions[idx],...result};
+      }
+    }catch(_){}
   }
+  return {updated,linked};
+}
+async function runPaymentActionReconcile({silent=false}={}){
+  const result=await softReconcileOpenActions();
+  // Refresh action/payment rows via normal authenticated load — still creates no payments.
+  try{
+    if(!state.paymentActionsError){
+      const [actions,pays,hist]=await Promise.all([
+        select('payment_actions','select=*&order=due_date.asc,id.asc'),
+        select('rent_payments','select=*&order=id'),
+        select('payment_action_history','select=*&order=changed_at.desc&limit=500')
+      ]);
+      state.paymentActions=actions||state.paymentActions;
+      state.payments=pays||state.payments;
+      state.paymentActionHistory=hist||state.paymentActionHistory;
+    }
+  }catch(_){}
+  if(!silent){
+    toast(`Reconciled ${result.updated} payment action(s)${result.linked?`; linked ${result.linked} existing payment(s)`:''}. No new payments created.`);
+  }
+  return result;
 }
 
 function relatedBookingLabel(t){
@@ -1145,8 +1246,8 @@ async function loadAll(){
   const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
   $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'viewer'}`;
   $('#new-stay').classList.toggle('hidden',!canEdit());
-  // Reconcile open actions against existing rent_payments without creating new payments.
-  try{await softReconcileOpenActions()}catch(_){}
+  // Owner/Manager only: non-destructive reconcile (no new payments created).
+  if(canEdit()){try{await softReconcileOpenActions()}catch(_){}}
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }
@@ -1468,7 +1569,8 @@ function paymentsPage(){
       <button class="btn ghost view-action-history" data-action="${esc(a.id)}">View History</button>
     </div>`;
   };
-  const actionPanel=`${setup}<section class="panel"><div class="panel-head"><div><h2>Payment actions / reminders</h2><div class="muted small">Editable &amp; traceable to the source booking. Cancelled / waived / superseded / resolved are <b>not</b> counted in Overdue.</div></div><span class="muted small">${displayPaymentActions('overdue').length} overdue</span></div>
+  const reconcileBtn=canEdit()?`<button type="button" class="btn ghost" id="reconcile-payment-actions" title="Recalculate stale actions and link existing rent payments. Does not create payments.">Reconcile Payment Actions</button>`:'';
+  const actionPanel=`${setup}<section class="panel"><div class="panel-head"><div><h2>Payment actions / reminders</h2><div class="muted small">Editable &amp; traceable to the source booking. Cancelled / waived / superseded / resolved are <b>not</b> counted in Overdue. Soft reconcile never invents payments.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${reconcileBtn}<span class="muted small">${displayPaymentActions('overdue').length} overdue</span></div></div>
   <div class="tenant-tools"><div class="view-switch">${['open','overdue','partially_paid','resolved','waived','cancelled','superseded','all'].map(x=>`<button class="${filter===x?'active':''}" data-afilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   ${actionRows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Related record</th><th>Type</th><th>Amount</th><th>Due</th><th>Status</th><th>Notes</th><th>Staff</th><th>Action</th></tr></thead><tbody>${actionRows.map(a=>{
     const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
@@ -1597,6 +1699,17 @@ function render(){
   $$('[data-tfilter]').forEach(b=>b.onclick=()=>{state.tenantFilter=b.dataset.tfilter;render()});
   $$('[data-vfilter]').forEach(b=>b.onclick=()=>{state.viewingFilter=b.dataset.vfilter;render()});
   $$('[data-afilter]').forEach(b=>b.onclick=()=>{state.actionFilter=b.dataset.afilter;render()});
+  const reconcileBtn=$('#reconcile-payment-actions');
+  if(reconcileBtn)reconcileBtn.onclick=async()=>{
+    if(!canEdit())return;
+    reconcileBtn.disabled=true;reconcileBtn.textContent='Reconciling…';
+    try{
+      await runPaymentActionReconcile({silent:false});
+      render();
+    }catch(e){alert(e.message||e)}
+    finally{reconcileBtn.disabled=false;reconcileBtn.textContent='Reconcile Payment Actions'}
+  };
+
   const addViewing=$('#add-viewing');if(addViewing)addViewing.onclick=()=>openViewing();
   const gotoAv=$('#goto-availability');if(gotoAv)gotoAv.onclick=()=>setPage('availability');
   const gotoBook=$('#goto-book-viewing');if(gotoBook)gotoBook.onclick=()=>openViewing();

@@ -33,7 +33,7 @@ label{display:grid;gap:6px;font-weight:700;font-size:12px}
 .content{padding:22px 26px 50px;display:grid;gap:18px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric,.panel{background:#fff;border:1px solid var(--line);border-radius:16px}.metric{padding:20px;box-shadow:0 3px 12px #1018280a;min-height:112px}.metric strong{letter-spacing:-.02em}.metric span{font-size:13px;color:var(--muted)}.metric strong{display:block;font-size:31px;margin:5px 0}.metric small{color:var(--muted)}
 .panel{padding:20px;box-shadow:0 4px 16px #1018280a}.panel+.panel{margin-top:2px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px}.panel-head h2{font-size:19px;margin:0}.seg{display:flex;gap:6px;flex-wrap:wrap}.seg button{border:1px solid var(--line);background:#fff;padding:7px 10px;border-radius:9px;cursor:pointer}.seg button.active{background:var(--nav);color:#fff;border-color:var(--nav)}
 .room-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.room-card{border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 2px 8px #10182808}.room-head{display:flex;justify-content:space-between;align-items:center}.room-card h3{margin:0;font-size:18px}.occupant{font-size:20px;font-weight:850;margin:13px 0 4px}.subline{font-size:12px;color:var(--muted)}.nextline{margin-top:11px;padding-top:9px;border-top:1px solid var(--line);font-size:12px}.room-actions{display:flex;gap:6px;margin-top:12px}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef0f3;color:#4f5661;font-size:11px;text-transform:capitalize}.badge.active,.badge.paid,.badge.resolved{background:var(--greenSoft);color:var(--green)}.badge.upcoming,.badge.open{background:var(--accentSoft);color:#3853b8}.badge.ensuite{background:var(--amberSoft);color:var(--amber)}.badge.historical,.badge.cancelled,.badge.canceled,.badge.superseded,.badge.waived,.badge.not_payable{background:#f0f1f3;color:#606773}.badge.current{background:var(--accentSoft);color:#3157a4}.badge.overdue,.badge.unpaid{background:var(--redSoft);color:var(--red)}.badge.due_today{background:var(--redSoft);color:var(--red)}.badge.due_soon,.badge.awaiting_payment,.badge.due_soon_action{background:var(--amberSoft);color:var(--amber)}.badge.available{background:var(--greenSoft);color:var(--green)}.badge.ok{background:var(--greenSoft);color:var(--green)}.badge.no_show,.badge.tbc{background:var(--amberSoft);color:var(--amber)}.badge.forfeited{background:var(--purpleSoft);color:var(--purple)}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#eef0f3;color:#4f5661;font-size:11px;text-transform:capitalize}.badge.active,.badge.paid,.badge.resolved{background:var(--greenSoft);color:var(--green)}.badge.upcoming,.badge.open{background:var(--accentSoft);color:#3853b8}.badge.ensuite{background:var(--amberSoft);color:var(--amber)}.badge.historical,.badge.cancelled,.badge.canceled,.badge.superseded,.badge.waived,.badge.not_payable{background:#f0f1f3;color:#606773}.badge.current{background:var(--accentSoft);color:#3157a4}.badge.partially_paid,.badge.due_soon{background:var(--amberSoft);color:var(--amber)}.badge.overdue,.badge.unpaid{background:var(--redSoft);color:var(--red)}.badge.due_today{background:var(--redSoft);color:var(--red)}.badge.due_soon,.badge.awaiting_payment,.badge.due_soon_action{background:var(--amberSoft);color:var(--amber)}.badge.available{background:var(--greenSoft);color:var(--green)}.badge.ok{background:var(--greenSoft);color:var(--green)}.badge.no_show,.badge.tbc{background:var(--amberSoft);color:var(--amber)}.badge.forfeited{background:var(--purpleSoft);color:var(--purple)}
 .action-status-overdue{color:var(--red);font-weight:750}.action-status-due_soon{color:var(--amber);font-weight:750}.action-status-resolved{color:var(--green);font-weight:750}.action-status-cancelled,.action-status-superseded,.action-status-waived{color:#606773}
 .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:820px}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}th{background:#fafbfc;color:#59616d;font-size:11px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}
 .empty{padding:28px;text-align:center;color:var(--muted)}
@@ -169,6 +169,9 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 <dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
   <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle. WeChat defaults to RMB (CNY); Cash / EFT default to AUD.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
   <input type="hidden" name="id" value="">
+  <input type="hidden" name="payment_action_id" value="">
+  <input type="hidden" name="idempotency_key" value="">
+  <div id="payment-action-context" class="note hidden" style="margin-top:12px"></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Tenancy<select name="tenancy_id" required></select></label>
     <label>Amount<input name="amount" type="number" step="0.01" required></label>
@@ -499,12 +502,37 @@ function expectedStayTotalSolo(t){
   const amt=Number(t.rent_amount||0);
   if(t.rent_period==='total')return amt;
   const nights=stayNights(t);
-  if(t.rent_period==='day'||t.rent_period==='night')return amt*Math.max(1,nights||1);
+  // Day/night rate, or short_term with blank period: nights × rate (checkout day not billed).
+  // This prevents short stays with a daily rate but blank rent_period falling into weekly ceil.
+  if(t.rent_period==='day'||t.rent_period==='night'||t.rent_period==='daily')return amt*Math.max(1,nights||1);
+  if(String(t.tenancy_type||'')==='short_term'&&(!t.rent_period||t.rent_period==='day'||t.rent_period==='night'||t.rent_period==='daily')&&nights!==null){
+    return amt*Math.max(1,nights);
+  }
+  if(String(t.tenancy_type||'')==='short_term'&&!t.rent_period&&nights!==null){
+    return amt*Math.max(1,nights);
+  }
   if(nights!==null){
     const weeks=Math.max(1,Math.ceil(nights/7));
     return amt*weeks;
   }
   return expectedRentAmount(t);
+}
+/** Human-readable rent obligation source (never invents unconfirmed nights). */
+function stayChargeBreakdown(t){
+  if(!t)return {label:'—',nights:null,rate:null,total:0,start:null,end:null};
+  const start=t.check_in||null,end=stayEndDate(t),nights=stayNights(t),rate=Number(t.rent_amount||0),total=expectedStayTotalSolo(t);
+  const period=String(t.rent_period||'');
+  let label='';
+  if(period==='total')label=`Total stay amount ${money(rate)}`;
+  else if(period==='day'||period==='night'||period==='daily'||(String(t.tenancy_type||'')==='short_term'&&!period)){
+    label=`${money(rate)}/night × ${nights??'?'} night${nights===1?'':'s'} = ${money(total)}`;
+  }else if(period==='week'||nights!==null){
+    const weeks=nights!==null?Math.max(1,Math.ceil(nights/7)):null;
+    label=weeks!=null?`${money(rate)}/week × ${weeks} week${weeks===1?'':'s'} = ${money(total)}`:`${money(rate)} / ${period||'cycle'}`;
+  }else label=`${money(rate)} / ${period||'period'}`;
+  if(start&&end)label+=` · ${start} → ${end}`;
+  else if(start)label+=` · from ${start}`;
+  return {label,nights,rate,total,start,end};
 }
 function expectedStayTotal(t){
   return paymentGroupMembers(t).reduce((s,x)=>s+expectedStayTotalSolo(x),0);
@@ -729,12 +757,76 @@ function validateDepositSplit(original,refunded,forfeited){
 function actionFingerprint(t){
   return `tenancy:${t.id}|due:${nextRentDue(t)||''}|amt:${paymentDueAmount(t)}`;
 }
+function parseActionMeta(notes){
+  const n=String(notes||'');
+  const orig=n.match(/ORIGINAL_AMOUNT:([0-9.]+)/);
+  const linkedPaymentIds=[...n.matchAll(/PAYMENT_ID:([0-9]+)/g)].map(m=>Number(m[1]));
+  return {originalAmount:orig?Number(orig[1]):null,paymentIds:linkedPaymentIds};
+}
+function withActionMeta(notes,meta){
+  let n=String(notes||'').replace(/\n?ORIGINAL_AMOUNT:[^\n]*/g,'').replace(/\n?PAYMENT_ID:[0-9]+/g,'').trim();
+  const lines=[n];
+  if(meta.originalAmount!=null)lines.push(`ORIGINAL_AMOUNT:${Number(meta.originalAmount)}`);
+  for(const id of (meta.paymentIds||[]))lines.push(`PAYMENT_ID:${id}`);
+  return lines.filter(Boolean).join('\n');
+}
+function paymentsLinkedToAction(a){
+  const meta=parseActionMeta(a?.notes);
+  const byId=new Set(meta.paymentIds||[]);
+  if(a?.related_payment_id)byId.add(Number(a.related_payment_id));
+  const t=state.tenancies.find(x=>Number(x.id)===Number(a?.tenancy_id));
+  const ids=t?new Set(paymentGroupMembers(t).map(x=>Number(x.id))):new Set([Number(a?.tenancy_id)]);
+  return state.payments.filter(p=>{
+    if(!isCountedPayment(p))return false;
+    if(byId.has(Number(p.id)))return true;
+    // Fallback: one-off stay — all counted group payments apply to the stay obligation.
+    if(t&&isOneOffStay(t)&&ids.has(Number(p.tenancy_id)))return true;
+    // Marker in payment notes
+    if(a?.id&&String(p.notes||'').includes(`ACTION_ID:${a.id}`))return true;
+    return false;
+  });
+}
+function actionOriginalAmount(a,t){
+  const meta=parseActionMeta(a?.notes);
+  if(meta.originalAmount!=null)return meta.originalAmount;
+  if(t&&isOneOffStay(t))return expectedStayTotal(t);
+  const paid=paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0);
+  return Math.max(Number(a?.amount||0)+paid,Number(a?.amount||0),paid);
+}
+function actionPaidAmount(a){
+  return Number(paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0).toFixed(2));
+}
+function actionRemainingAmount(a){
+  const t=state.tenancies.find(x=>Number(x.id)===Number(a?.tenancy_id));
+  // Live one-off remaining from booking beats stale stored amount.
+  if(t&&isOneOffStay(t))return stayBalanceDue(t);
+  const rem=Math.max(0,Number((actionOriginalAmount(a,t)-actionPaidAmount(a)).toFixed(2)));
+  return rem;
+}
+function actionDisplayAmount(a){
+  const st=String(a?.status||'').toLowerCase();
+  if(['resolved','waived','cancelled','canceled','superseded'].includes(st))return Number(a?.amount||0);
+  return actionRemainingAmount(a);
+}
 function paymentActionLiveStatus(a){
   const st=String(a.status||'open').toLowerCase();
   if(['resolved','waived','cancelled','canceled','superseded'].includes(st))return st==='canceled'?'cancelled':st;
-  // Cancelled / no-show bookings must never inflate Overdue, even if an open row was left behind.
   const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
   if(t&&isCancelledOrNoShow(t)&&rentTreatment(t)!=='keep_due')return 'cancelled';
+  const remaining=actionRemainingAmount(a);
+  if(remaining<=0.009){
+    // Fully covered by rent_payments — never Overdue/Open.
+    return 'resolved';
+  }
+  if(st==='partially_paid'||(actionPaidAmount(a)>0.009&&remaining>0.009)){
+    // Still payable — overdue only when due date passed.
+    if(a.due_date){
+      const delta=Math.floor((new Date(a.due_date+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
+      if(delta<0)return 'overdue';
+      if(delta<=3)return 'due_soon';
+    }
+    return 'partially_paid';
+  }
   if(!a.due_date)return 'open';
   const delta=Math.floor((new Date(a.due_date+'T00:00:00')-new Date(today()+'T00:00:00'))/86400000);
   if(delta<0)return 'overdue';
@@ -744,6 +836,75 @@ function paymentActionLiveStatus(a){
 function isActionCountedInOverdue(a){
   return paymentActionLiveStatus(a)==='overdue';
 }
+function paymentIdempotencyKey(actionId,amount,receivedDate,periodStart,periodEnd){
+  return `pa:${actionId||'none'}|amt:${Number(amount||0).toFixed(2)}|recv:${receivedDate||''}|ps:${periodStart||''}|pe:${periodEnd||''}`;
+}
+function findPaymentByIdempotencyKey(key){
+  if(!key)return null;
+  return state.payments.find(p=>String(p.notes||'').includes(`IDEMPOTENCY_KEY:${key}`))||null;
+}
+async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
+  if(!action||action.virtual||String(action.id).startsWith('virtual'))return null;
+  if(state.paymentActionsError)return null;
+  const t=state.tenancies.find(x=>Number(x.id)===Number(action.tenancy_id));
+  const prevStatus=action.status,prevAmount=action.amount;
+  let notes=action.notes||'';
+  const meta=parseActionMeta(notes);
+  const original=meta.originalAmount!=null?meta.originalAmount:(t&&isOneOffStay(t)?expectedStayTotal(t):Number(action.amount||0)+ (payment?Number(payment.amount||0):0));
+  const paymentIds=new Set(meta.paymentIds||[]);
+  if(action.related_payment_id)paymentIds.add(Number(action.related_payment_id));
+  if(payment?.id)paymentIds.add(Number(payment.id));
+  notes=withActionMeta(notes,{originalAmount:original,paymentIds:[...paymentIds]});
+  // Temporarily apply notes so paid/remaining helpers see the new link
+  const probe={...action,notes,related_payment_id:payment?.id||action.related_payment_id};
+  const paid=actionPaidAmount(probe);
+  const remaining=t&&isOneOffStay(t)?stayBalanceDue(t):Math.max(0,Number((original-paid).toFixed(2)));
+  const uid=getSession()?.user?.id||null;
+  const now=new Date().toISOString();
+  let status,resolve_reason=action.resolve_reason||null;
+  if(remaining<=0.009){
+    status='resolved';
+    resolve_reason='Paid';
+  }else if(paid>0.009){
+    status='partially_paid';
+    resolve_reason=null;
+  }else{
+    status=['open','due_soon','overdue','partially_paid'].includes(String(action.status||'open'))?action.status:'open';
+  }
+  const patchRow={
+    amount:remaining<=0.009?0:remaining,
+    status,
+    notes,
+    related_payment_id:payment?.id||action.related_payment_id||null,
+    resolve_reason,
+    last_modified_by:uid,
+    last_modified_at:now
+  };
+  if(status==='resolved'){
+    patchRow.resolved_by=uid;
+    patchRow.resolved_at=now;
+  }
+  await patch('payment_actions',`id=eq.${action.id}`,patchRow);
+  if(String(prevStatus)!==String(status))await logActionHistory(action.id,'status',prevStatus,status,payment?`Payment #${payment.id} recorded`:'Reconciled against rent_payments');
+  if(Number(prevAmount)!==Number(patchRow.amount))await logActionHistory(action.id,'amount',prevAmount,patchRow.amount,`Remaining after payments (paid ${paid})`);
+  if(payment?.id){
+    await logActionHistory(action.id,'payment',String(actionRemainingAmount({...action,notes:action.notes})),String(remaining),`Payment received ${payment.amount} via ${payment.payment_method||'—'} on ${payment.received_date||'—'}; payment_id=${payment.id}; period ${payment.period_start||'—'}→${payment.period_end||'—'}`);
+  }
+  return {...action,...patchRow};
+}
+async function softReconcileOpenActions(){
+  if(state.paymentActionsError)return;
+  const open=(state.paymentActions||[]).filter(a=>['open','due_soon','overdue','partially_paid'].includes(String(a.status||'').toLowerCase()));
+  for(const a of open){
+    const rem=actionRemainingAmount(a);
+    const paid=actionPaidAmount(a);
+    // Only auto-write when clearly fully paid or amount/status drifted from live remaining.
+    if(rem<=0.009||(paid>0.009&&Number(a.amount)!==rem)||(paid>0.009&&String(a.status)!=='partially_paid'&&rem>0.009)){
+      try{await reconcilePaymentAction(a,{toastMsg:false})}catch(_){}
+    }
+  }
+}
+
 function relatedBookingLabel(t){
   if(!t)return '—';
   const prop=propertyBy(roomBy(t.room_id)?.property_id);
@@ -785,7 +946,7 @@ function scopedPaymentActions(){
     .filter(a=>['open','due_soon','overdue'].includes(String(a.status||'').toLowerCase())||a.virtual)
     .map(a=>Number(a.tenancy_id)));
   // Also cover tenancies that already have any non-superseded open-like OR any persisted open row
-  const openTenancyIds=new Set(persisted.filter(a=>['open','due_soon','overdue'].includes(paymentActionLiveStatus(a))).map(a=>Number(a.tenancy_id)));
+  const openTenancyIds=new Set(persisted.filter(a=>['open','due_soon','overdue','partially_paid'].includes(paymentActionLiveStatus(a))).map(a=>Number(a.tenancy_id)));
   const virtuals=scopedTenancies().filter(t=>tenancyKind(t)!=='historical'&&isPaymentGroupPrimary(t)&&needsPaymentAction(t)&&!openTenancyIds.has(Number(t.id))).map(virtualPaymentAction);
   return [...persisted, ...virtuals];
 }
@@ -794,8 +955,10 @@ function displayPaymentActions(filter){
   return scopedPaymentActions().filter(a=>{
     const st=paymentActionLiveStatus(a);
     if(f==='all')return true;
-    if(f==='open')return ['open','due_soon','overdue'].includes(st);
+    if(f==='open')return ['open','due_soon','overdue','partially_paid'].includes(st);
     if(f==='overdue')return st==='overdue';
+    if(f==='resolved')return st==='resolved';
+    if(f==='partially_paid')return st==='partially_paid';
     return st===f;
   }).sort((a,b)=>{
     const ao=paymentActionLiveStatus(a)==='overdue'?0:1,bo=paymentActionLiveStatus(b)==='overdue'?0:1;
@@ -946,6 +1109,8 @@ async function loadAll(){
   const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
   $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'viewer'}`;
   $('#new-stay').classList.toggle('hidden',!canEdit());
+  // Reconcile open actions against existing rent_payments without creating new payments.
+  try{await softReconcileOpenActions()}catch(_){}
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }
@@ -1258,7 +1423,7 @@ function paymentsPage(){
       <button class="btn ghost edit-payment-action" data-action="${esc(a.id)}">Edit Action</button>
       <button class="btn ghost open-source-booking" data-tenancy="${tid}">Open Source Booking</button>
       <button class="btn ghost open-tenant-profile" data-tenant="${a.tenant_id||''}">Open Tenant</button>
-      <button class="btn primary record-due-payment" data-tenancy="${tid}">Record payment</button>
+      <button class="btn primary record-due-payment" data-tenancy="${tid}" data-action="${esc(a.id)}">Record payment</button>
       <button class="btn ghost resolve-payment-action" data-action="${esc(a.id)}">Mark Resolved</button>
       <button class="btn ghost waive-payment-action" data-action="${esc(a.id)}">Waive Payment</button>
       <button class="btn ghost cancel-booking-row" data-tenancy="${tid}">Cancel Booking</button>
@@ -1268,13 +1433,17 @@ function paymentsPage(){
     </div>`;
   };
   const actionPanel=`${setup}<section class="panel"><div class="panel-head"><div><h2>Payment actions / reminders</h2><div class="muted small">Editable &amp; traceable to the source booking. Cancelled / waived / superseded / resolved are <b>not</b> counted in Overdue.</div></div><span class="muted small">${displayPaymentActions('overdue').length} overdue</span></div>
-  <div class="tenant-tools"><div class="view-switch">${['open','overdue','resolved','waived','cancelled','superseded','all'].map(x=>`<button class="${filter===x?'active':''}" data-afilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
+  <div class="tenant-tools"><div class="view-switch">${['open','overdue','partially_paid','resolved','waived','cancelled','superseded','all'].map(x=>`<button class="${filter===x?'active':''}" data-afilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   ${actionRows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Related record</th><th>Type</th><th>Amount</th><th>Due</th><th>Status</th><th>Notes</th><th>Staff</th><th>Action</th></tr></thead><tbody>${actionRows.map(a=>{
     const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
     const st=paymentActionLiveStatus(a);
     const related=`<button type="button" class="linkbtn open-source-booking" data-tenancy="${a.tenancy_id}">Related Booking: ${esc(relatedBookingLabel(t))}</button>${a.related_payment_id?`<div class="muted small">Related Payment: #${esc(a.related_payment_id)}</div>`:''}${a.related_bond_id?`<div class="muted small">Related Deposit: #${esc(a.related_bond_id)}</div>`:''}`;
     const staff=`${a.created_by?`<div class="muted small">Created ${esc(staffLabel(a.created_by))}</div>`:''}${a.last_modified_by?`<div class="muted small">Modified ${esc(staffLabel(a.last_modified_by))}</div>`:''}${a.resolved_by?`<div class="muted small">Resolved ${esc(staffLabel(a.resolved_by))}</div>`:''}${a.virtual?'<div class="muted small">Derived (not yet saved)</div>':''}`;
-    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLabel(a.room_id||t?.room_id))}</div></td><td>${related}</td><td>${esc((a.action_type||'rent_due').replace('_',' '))}</td><td><b>${money(a.amount)}</b></td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(a.notes||'')}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
+    const breakdown=t?stayChargeBreakdown(t):null;
+    const showAmt=actionDisplayAmount(a);
+    const paidAmt=actionPaidAmount(a);
+    const origAmt=actionOriginalAmount(a,t);
+    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLabel(a.room_id||t?.room_id))}</div></td><td>${related}</td><td>${esc((a.action_type||'rent_due').replace('_',' '))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
   }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions in this filter.</div>'}</section>`;
   return `${actionPanel}
   <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Cancelled bookings excluded.</div></div></div>
@@ -1363,7 +1532,7 @@ function render(){
   $$('.edit-tenant').forEach(b=>b.onclick=()=>openTenant(Number(b.dataset.tenant)));
   $$('.edit-tenancy').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
   const ap=$('#add-payment');if(ap)ap.onclick=()=>openPayment();
-  $$('.record-due-payment').forEach(b=>b.onclick=()=>openPayment(Number(b.dataset.tenancy)));
+  $$('.record-due-payment').forEach(b=>b.onclick=()=>openPayment(Number(b.dataset.tenancy),b.dataset.action));
   $$('.edit-payment').forEach(b=>b.onclick=()=>openEditPayment(Number(b.dataset.payment)));
   const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
   $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));
@@ -1515,9 +1684,11 @@ function applyPaymentPeriodDefaults(f,t,{force=false,fillAmount=false}={}){
   if(force||!f.elements.period_end.value)f.elements.period_end.value=sug.end;
   if(fillAmount&&(force||!f.elements.amount.value))f.elements.amount.value=sug.amount||'';
 }
-function openPayment(tenancyId){
+function openPayment(tenancyId,actionId){
   if(!canEdit())return;
   const f=$('#payment-form');f.reset();f.elements.id.value='';
+  f.elements.payment_action_id.value=actionId!=null&&actionId!==''?String(actionId):'';
+  f.elements.idempotency_key.value='';
   f.elements.tenancy_id.innerHTML=tenancyOptions();
   if(tenancyId)f.elements.tenancy_id.value=String(tenancyId);
   f.elements.received_date.value=today();
@@ -1526,7 +1697,19 @@ function openPayment(tenancyId){
   syncPaymentCurrencyFromMethod(f,{force:true});
   const t=state.tenancies.find(x=>Number(x.id)===Number(f.elements.tenancy_id.value));
   applyPaymentPeriodDefaults(f,t,{force:true,fillAmount:true});
-  $('#payment-dialog-title').textContent='Record rent payment';
+  const ctx=$('#payment-action-context');
+  const a=actionId!=null&&actionId!==''?findActionById(actionId):null;
+  if(a&&t){
+    const rem=actionRemainingAmount(a);
+    const br=stayChargeBreakdown(t);
+    f.elements.amount.value=rem>0?rem:(f.elements.amount.value||'');
+    ctx.classList.remove('hidden');
+    ctx.innerHTML=`<b>From Payment Action</b> · remaining <b>${money(rem)}</b><div class="muted small">${esc(br.label)}</div>`;
+    f.elements.idempotency_key.value=paymentIdempotencyKey(a.id,f.elements.amount.value,f.elements.received_date.value,f.elements.period_start.value,f.elements.period_end.value);
+  }else{
+    ctx.classList.add('hidden');ctx.innerHTML='';
+  }
+  $('#payment-dialog-title').textContent=a?'Record payment for Payment Action':'Record rent payment';
   $('#payment-error').classList.add('hidden');
   f.elements.tenancy_id.onchange=()=>{
     const tt=state.tenancies.find(x=>Number(x.id)===Number(f.elements.tenancy_id.value));
@@ -1856,6 +2039,12 @@ $('#payment-form').onsubmit=async e=>{
   const f=e.currentTarget,fd=new FormData(f),err=$('#payment-error');err.classList.add('hidden');
   const tid=Number(fd.get('tenancy_id'));
   const t=state.tenancies.find(x=>Number(x.id)===tid);
+  const actionIdRaw=fd.get('payment_action_id');
+  const actionId=actionIdRaw&&!String(actionIdRaw).startsWith('virtual')?Number(actionIdRaw):null;
+  let action=actionId?findActionById(actionId):null;
+  if(actionIdRaw&&String(actionIdRaw).startsWith('virtual')){
+    try{action=await ensurePersistedAction(findActionById(actionIdRaw)||virtualPaymentAction(t))}catch(ex){err.textContent=ex.message;err.classList.remove('hidden');return}
+  }
   let period_start=fd.get('period_start')||null, period_end=fd.get('period_end')||null;
   if((!period_start||!period_end)&&t){
     const sug=suggestPaymentPeriod(t);
@@ -1866,28 +2055,61 @@ $('#payment-form').onsubmit=async e=>{
   if(period_start&&period_end&&period_end<period_start){err.textContent='Period end must be on or after period start.';err.classList.remove('hidden');return}
   const method=normalizePaymentMethod(fd.get('payment_method'));
   const currency=fd.get('currency')==='CNY'?'CNY':'AUD';
+  const amount=Number(fd.get('amount'));
+  const received_date=fd.get('received_date')||today();
+  const idem=fd.get('idempotency_key')||paymentIdempotencyKey(action?.id,amount,received_date,period_start,period_end);
+  // Double-click / retry protection
+  const existing=findPaymentByIdempotencyKey(idem);
+  if(existing&&!Number(fd.get('id')||0)){
+    if(action)await reconcilePaymentAction(action,{payment:existing});
+    f.reset();f.elements.id.value='';$('#payment-dialog').close();
+    toast('Payment already recorded (duplicate prevented)');
+    await loadAll();
+    return;
+  }
+  let notes=withPaymentCurrency(fd.get('notes')||'',currency);
+  if(action?.id)notes=`${notes}\nACTION_ID:${action.id}\nIDEMPOTENCY_KEY:${idem}`.trim();
+  else notes=`${notes}\nIDEMPOTENCY_KEY:${idem}`.trim();
   const row={
     tenancy_id:tid,
-    amount:Number(fd.get('amount')),
+    amount,
     period_start,
     period_end,
-    received_date:fd.get('received_date')||today(),
+    received_date,
     status:'paid',
     payment_method:method,
-    notes:withPaymentCurrency(fd.get('notes')||'',currency),
+    notes,
     recorded_by:getSession()?.user?.id||null
   };
   const editId=Number(fd.get('id')||0);
   try{
+    let payment=null;
     if(editId){
       const {recorded_by,...patchRow}=row;
       await patch('rent_payments',`id=eq.${editId}`,patchRow);
+      payment={...row,id:editId};
       toast('Payment updated');
     }else{
-      await insert('rent_payments',row);
-      toast('Payment recorded');
+      const created=await insert('rent_payments',row);
+      payment=created?.[0]||{...row};
+      // Push into local state immediately so reconcile sees it before reload
+      if(payment&&!state.payments.some(p=>Number(p.id)===Number(payment.id)))state.payments.push(payment);
     }
-    f.reset();f.elements.id.value='';$('#payment-dialog').close();await loadAll();
+    let msg='Payment recorded successfully.';
+    if(action){
+      const updated=await reconcilePaymentAction(action,{payment});
+      const rem=Number(updated?.amount||0);
+      if(updated?.status==='resolved'){
+        if(t&&isOneOffStay(t))msg='Payment recorded successfully. One-off stay fully paid. No further rent due.';
+        else{
+          const next=nextRentDue({...t}); // may be null until reload
+          msg=`Payment recorded successfully. Payment Action resolved.${next?` Next due: ${next}.`:''}`;
+        }
+      }else msg=`Partial payment recorded. Remaining: ${money(rem)}`;
+    }
+    f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
+    $('#payment-action-context').classList.add('hidden');
+    $('#payment-dialog').close();toast(msg);await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#bond-form').onsubmit=async e=>{

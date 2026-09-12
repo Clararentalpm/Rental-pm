@@ -172,12 +172,43 @@ assert('TEST G remaining 0', rem===0);
 assert('TEST G original 800', orig===800);
 assert('TEST G paid + remaining = original', Math.abs(paid+rem-orig)<0.01);
 
+// ---------- TEST H: overpayment flags excess (does not invent another tenancy action) ----------
+seed();
+S.tenancies=[{id:301,tenant_id:1,room_id:5,check_in:'2026-03-01',check_out:'2026-03-28',rent_amount:800,rent_period:'total',tenancy_type:'short_term',status:'active'}];
+S.paymentActions=[{id:8,tenancy_id:301,tenant_id:1,room_id:5,property_id:1,amount:800,due_date:'2026-03-01',status:'open',notes:'ORIGINAL_AMOUNT:800'}];
+assert('TEST H outstanding before overpay = 800', sandbox.actionRemainingAmount(S.paymentActions[0])===800);
+const overpay={id:90,tenancy_id:301,amount:900,status:'paid',received_date:'2026-03-02',period_start:'2026-03-01',period_end:'2026-03-28',notes:'ACTION_ID:8'};
+// Simulate Record Payment: push payment into state BEFORE reconcile figures "before"
+S.payments=[overpay];
+assert('TEST H before-payment remaining ignores already-pushed row', sandbox.actionRemainingBeforePayment(S.paymentActions[0],overpay)===800);
+assert('TEST H excess = 100 when 900 received vs 800 due', Math.max(0,900-sandbox.actionRemainingBeforePayment(S.paymentActions[0],overpay))===100);
+S.paymentActions[0].notes='ORIGINAL_AMOUNT:800\nPAYMENT_ID:90\nEXCESS_AMOUNT:100';
+S.paymentActions[0].amount=0;S.paymentActions[0].status='resolved';S.paymentActions[0].resolve_reason='Paid';
+S.payments[0].notes='ACTION_ID:8\nEXCESS_AMOUNT:100';
+assert('TEST H overpay resolves action', sandbox.paymentActionLiveStatus(S.paymentActions[0])==='resolved');
+assert('TEST H remaining 0 after overpay', sandbox.actionRemainingAmount(S.paymentActions[0])===0);
+assert('TEST H excess kept on payment notes', String(S.payments[0].notes).includes('EXCESS_AMOUNT:100'));
+assert('TEST H excess handling present in app', html.includes('EXCESS_AMOUNT')&&html.includes('actionRemainingBeforePayment'));
+
+// ---------- TEST E2 (recurring): after full cycle pay, next due advances; paid action not overdue ----------
+seed();
+const recurringT={id:401,tenant_id:1,room_id:5,check_in:'2026-01-01',rent_amount:200,rent_period:'week',payment_cycle_weeks:4,tenancy_type:'long_term',status:'active'};
+S.tenancies=[recurringT];
+S.payments=[{id:91,tenancy_id:401,amount:800,status:'paid',received_date:'2026-01-02',period_start:'2026-01-01',period_end:'2026-01-28',notes:'ACTION_ID:11'}];
+S.paymentActions=[{id:11,tenancy_id:401,amount:0,due_date:'2026-01-01',status:'resolved',notes:'ORIGINAL_AMOUNT:800\nPAYMENT_ID:91',resolve_reason:'Paid',related_payment_id:91}];
+assert('TEST E2 paid action not overdue', sandbox.paymentActionLiveStatus(S.paymentActions[0])!=='overdue');
+assert('TEST E2 paid action resolved', sandbox.paymentActionLiveStatus(S.paymentActions[0])==='resolved');
+const nextDue=sandbox.nextRentDue(recurringT);
+assert('TEST E2 next due after paid-through exists', !!nextDue && nextDue>'2026-01-28');
+
 // Markup / wiring
 assert('payment form has action id field', html.includes('name="payment_action_id"'));
 assert('payment form has idempotency field', html.includes('name="idempotency_key"'));
 assert('record button passes data-action', html.includes('data-action="${esc(a.id)}"')||html.includes('data-action="'));
 assert('soft reconcile on load', html.includes('softReconcileOpenActions'));
 assert('resolve reason Paid path', html.includes("resolve_reason='Paid'")||html.includes('resolve_reason:"Paid"')||html.includes("resolve_reason='Paid'")||html.includes('Paid'));
+assert('confirmation mentions Payment Action resolved', html.includes('Payment Action resolved'));
+assert('confirmation mentions remaining for partial', html.includes('remaining'));
 
 if(process.exitCode)console.log('payment-reconcile-test FAILED');
 else console.log('payment-reconcile-test passed');

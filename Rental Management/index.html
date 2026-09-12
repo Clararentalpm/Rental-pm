@@ -791,7 +791,14 @@ function actionOriginalAmount(a,t){
   if(meta.originalAmount!=null)return meta.originalAmount;
   if(t&&isOneOffStay(t))return expectedStayTotal(t);
   const paid=paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0);
-  return Math.max(Number(a?.amount||0)+paid,Number(a?.amount||0),paid);
+  const amt=Number(a?.amount||0);
+  // After a reconcile we store remaining in amount and ORIGINAL_AMOUNT in notes.
+  // If PAYMENT_ID / related_payment_id exists but ORIGINAL_AMOUNT was lost, reconstruct.
+  if((meta.paymentIds||[]).length||a?.related_payment_id){
+    return Number(Math.max(amt+paid,amt,paid).toFixed(2));
+  }
+  // Never reconciled: stored amount is the original obligation (do not add in-flight payments).
+  return amt;
 }
 function actionPaidAmount(a){
   return Number(paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0).toFixed(2));
@@ -802,6 +809,14 @@ function actionRemainingAmount(a){
   if(t&&isOneOffStay(t))return stayBalanceDue(t);
   const rem=Math.max(0,Number((actionOriginalAmount(a,t)-actionPaidAmount(a)).toFixed(2)));
   return rem;
+}
+/** Remaining before a specific rent_payments row is applied (Record Payment pushes the row into state first). */
+function actionRemainingBeforePayment(a,payment){
+  if(!payment?.id)return actionRemainingAmount(a);
+  const saved=state.payments;
+  state.payments=state.payments.filter(p=>Number(p.id)!==Number(payment.id));
+  try{return actionRemainingAmount(a)}
+  finally{state.payments=saved}
 }
 function actionDisplayAmount(a){
   const st=String(a?.status||'').toLowerCase();
@@ -848,9 +863,15 @@ async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
   if(state.paymentActionsError)return null;
   const t=state.tenancies.find(x=>Number(x.id)===Number(action.tenancy_id));
   const prevStatus=action.status,prevAmount=action.amount;
+  // Payment may already be in state.payments (inserted just before reconcile) — exclude it for "before" figures.
+  const outstandingBefore=actionRemainingBeforePayment(action,payment);
   let notes=action.notes||'';
   const meta=parseActionMeta(notes);
-  const original=meta.originalAmount!=null?meta.originalAmount:(t&&isOneOffStay(t)?expectedStayTotal(t):Number(action.amount||0)+ (payment?Number(payment.amount||0):0));
+  const original=meta.originalAmount!=null
+    ? meta.originalAmount
+    : (t&&isOneOffStay(t)
+      ? expectedStayTotal(t)
+      : actionOriginalAmount(action,t) || Number(action.amount||0));
   const paymentIds=new Set(meta.paymentIds||[]);
   if(action.related_payment_id)paymentIds.add(Number(action.related_payment_id));
   if(payment?.id)paymentIds.add(Number(payment.id));
@@ -859,6 +880,15 @@ async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
   const probe={...action,notes,related_payment_id:payment?.id||action.related_payment_id};
   const paid=actionPaidAmount(probe);
   const remaining=t&&isOneOffStay(t)?stayBalanceDue(t):Math.max(0,Number((original-paid).toFixed(2)));
+  const excess=payment?Math.max(0,Number((Number(payment.amount||0)-Number(outstandingBefore||0)).toFixed(2))):0;
+  if(excess>0.009){
+    notes=String(notes||'').replace(/\n?EXCESS_AMOUNT:[^\n]*/g,'').trim()+`\nEXCESS_AMOUNT:${excess}`;
+    // Keep excess on this payment note only — do not auto-apply to another tenancy.
+    if(payment){
+      payment.notes=String(payment.notes||'').replace(/\n?EXCESS_AMOUNT:[^\n]*/g,'').trim()+`\nEXCESS_AMOUNT:${excess}`;
+      try{await patch('rent_payments',`id=eq.${payment.id}`,{notes:payment.notes})}catch(_){}
+    }
+  }
   const uid=getSession()?.user?.id||null;
   const now=new Date().toISOString();
   let status,resolve_reason=action.resolve_reason||null;
@@ -888,9 +918,15 @@ async function reconcilePaymentAction(action,{payment=null,toastMsg=true}={}){
   if(String(prevStatus)!==String(status))await logActionHistory(action.id,'status',prevStatus,status,payment?`Payment #${payment.id} recorded`:'Reconciled against rent_payments');
   if(Number(prevAmount)!==Number(patchRow.amount))await logActionHistory(action.id,'amount',prevAmount,patchRow.amount,`Remaining after payments (paid ${paid})`);
   if(payment?.id){
-    await logActionHistory(action.id,'payment',String(actionRemainingAmount({...action,notes:action.notes})),String(remaining),`Payment received ${payment.amount} via ${payment.payment_method||'—'} on ${payment.received_date||'—'}; payment_id=${payment.id}; period ${payment.period_start||'—'}→${payment.period_end||'—'}`);
+    await logActionHistory(
+      action.id,
+      'payment',
+      String(outstandingBefore),
+      String(remaining),
+      `Payment received ${payment.amount} via ${payment.payment_method||'—'} on ${payment.received_date||'—'}; payment_id=${payment.id}; period ${payment.period_start||'—'}→${payment.period_end||'—'}${excess>0.009?`; excess ${excess} kept on this payment (not applied to another tenancy)`:''}`
+    );
   }
-  return {...action,...patchRow};
+  return {...action,...patchRow,excess};
 }
 async function softReconcileOpenActions(){
   if(state.paymentActionsError)return;
@@ -2100,12 +2136,16 @@ $('#payment-form').onsubmit=async e=>{
       const updated=await reconcilePaymentAction(action,{payment});
       const rem=Number(updated?.amount||0);
       if(updated?.status==='resolved'){
-        if(t&&isOneOffStay(t))msg='Payment recorded successfully. One-off stay fully paid. No further rent due.';
+        if(t&&isOneOffStay(t))msg='Payment recorded successfully. Payment Action resolved. One-off stay fully paid. No further rent due.';
         else{
-          const next=nextRentDue({...t}); // may be null until reload
-          msg=`Payment recorded successfully. Payment Action resolved.${next?` Next due: ${next}.`:''}`;
+          // Recurring: next obligation is derived from paid-through + cycle after reload.
+          const next=nextRentDue(t);
+          msg=`Payment recorded successfully.\nPayment Action resolved.${next?`\nNext due: ${next}.`:''}`;
         }
-      }else msg=`Partial payment recorded. Remaining: ${money(rem)}`;
+        if(Number(updated.excess||0)>0.009)msg+=`\nExcess ${money(updated.excess)} recorded on this payment (not applied to another tenancy).`;
+      }else{
+        msg=`Partial payment recorded.\n${money(rem)} remaining.`;
+      }
     }
     f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
     $('#payment-action-context').classList.add('hidden');

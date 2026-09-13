@@ -724,17 +724,65 @@ function stayChargeBreakdown(t){
   else if(start)label+=` · from ${start}`;
   return {label,nights,rate,total,start,end,unit,calculated,override:meta.override};
 }
+/**
+ * Members that count toward the *active* rent obligation.
+ * paymentGroupMembers still includes historical/cancelled siblings (for payment lookup),
+ * but those must NOT inflate amount-due (Laura $175 + legacy $460 = $635 bug).
+ */
+function obligationMembers(t){
+  if(!t)return [];
+  const members=paymentGroupMembers(t).filter(x=>{
+    if(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due')return false;
+    if(tenancyKind(x)==='historical')return false;
+    return true;
+  });
+  return members.length?members:[t];
+}
+/** Explicit Payment Action MANUAL_AMOUNT lock for this stay/group (authoritative override). */
+function lockedManualObligation(t){
+  if(!t)return null;
+  const ids=new Set(obligationMembers(t).map(x=>Number(x.id)));
+  ids.add(Number(t.id));
+  const actions=(state.paymentActions||[]).filter(a=>{
+    if(!ids.has(Number(a.tenancy_id)))return false;
+    const st=String(a.status||'').toLowerCase();
+    if(['cancelled','canceled','waived','superseded'].includes(st))return false;
+    const meta=parseActionMeta(a.notes);
+    return meta.amountLocked&&meta.manualAmount!=null;
+  });
+  if(!actions.length)return null;
+  const own=actions.find(a=>Number(a.tenancy_id)===Number(t.id));
+  return Number(parseActionMeta((own||actions[0]).notes).manualAmount);
+}
+/**
+ * Single source of truth for amount due.
+ * final_amount_due = Payment Action MANUAL_AMOUNT lock
+ *                 OR stay RENT_OVERRIDE
+ *                 OR calculated rent (billable_nights × rate for short stays)
+ * Short/one-off stays use THIS stay's solo total only — never add a legacy/sibling
+ * booking total (that produced Laura's false $635 = $460 + $175).
+ * Long-term shared rooms still sum obligationMembers.
+ * Payment Action, Rent Due Schedule, Overview, and status all consume this.
+ */
+function finalAmountDue(t){
+  if(!t)return 0;
+  const locked=lockedManualObligation(t);
+  if(locked!=null)return Number(locked);
+  if(isOneOffStay(t))return Number(expectedStayTotalSolo(t).toFixed(2));
+  return Number(obligationMembers(t).reduce((s,x)=>s+expectedStayTotalSolo(x),0).toFixed(2));
+}
 function expectedStayTotal(t){
-  return paymentGroupMembers(t).reduce((s,x)=>s+expectedStayTotalSolo(x),0);
+  return finalAmountDue(t);
 }
 function groupPaymentAmount(t){
+  // Count payments across the full room+check-in group (incl. historical) so coverage is not lost.
   const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
   return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
     .reduce((s,p)=>s+Number(p.amount||0),0);
 }
-function stayBalanceDue(t){return Math.max(0,Number((expectedStayTotal(t)-groupPaymentAmount(t)).toFixed(2)))}
+function stayBalanceDue(t){return Math.max(0,Number((finalAmountDue(t)-groupPaymentAmount(t)).toFixed(2)))}
 function isStayFullyPaid(t){
-  const expected=expectedStayTotal(t);
+  const expected=finalAmountDue(t);
   if(expected<=0){
     // No priced total — fall back to period coverage through stay end / today.
     const through=paidThrough(t),end=stayEndDate(t);
@@ -1016,11 +1064,11 @@ function paymentsLinkedToAction(a){
 }
 function actionOriginalAmount(a,t){
   const meta=parseActionMeta(a?.notes);
-  // Manual edit is authoritative — do not silently revert to booking calc.
+  // Explicit MANUAL_AMOUNT edit is the only frozen short-stay override.
   if(meta.amountLocked&&meta.manualAmount!=null)return Number(meta.manualAmount);
+  // One-off stays: always live finalAmountDue — ignore stale ORIGINAL_AMOUNT (e.g. legacy $460/$635).
+  if(t&&isOneOffStay(t))return finalAmountDue(t);
   if(meta.amountLocked&&meta.originalAmount!=null)return Number(meta.originalAmount);
-  // Short / one-off stays without a manual lock: booking (incl. rent override) is source of truth.
-  if(t&&isOneOffStay(t))return expectedStayTotal(t);
   if(meta.originalAmount!=null)return meta.originalAmount;
   const paid=paymentsLinkedToAction(a).reduce((s,p)=>s+Number(p.amount||0),0);
   const amt=Number(a?.amount||0);
@@ -1241,8 +1289,10 @@ async function softReconcileOpenActions(){
     const rem=actionRemainingAmount(a);
     const paid=actionPaidAmount(a);
     const meta=parseActionMeta(a.notes);
-    const liveOrig=t&&isOneOffStay(t)&&!meta.amountLocked?expectedStayTotal(t):null;
-    const staleOrig=!meta.amountLocked&&liveOrig!=null&&meta.originalAmount!=null&&Math.abs(Number(meta.originalAmount)-liveOrig)>0.009;
+    // Only an explicit MANUAL_AMOUNT edit freezes obligation; stale ORIGINAL_AMOUNT alone can refresh.
+    const trulyLocked=!!(meta.amountLocked&&meta.manualAmount!=null);
+    const liveOrig=t&&isOneOffStay(t)&&!trulyLocked?finalAmountDue(t):null;
+    const staleOrig=!trulyLocked&&liveOrig!=null&&meta.originalAmount!=null&&Math.abs(Number(meta.originalAmount)-liveOrig)>0.009;
     const amountDrift=Math.abs(Number(a.amount||0)-rem)>0.009;
     const match=findConfidentExistingPayment(a);
     // Never invent payments. Locked manual amounts are not overwritten by booking recalc.
@@ -2773,6 +2823,23 @@ $('#payment-action-form').onsubmit=async e=>{
       manualAmount:due,
       paymentIds:[...new Set(paymentIds)]
     });
+    // Keep stay RENT_OVERRIDE in sync so Schedule / Stay / Action share one obligation.
+    if(t&&isOneOffStay(t)){
+      const prevRent=parseRentMeta(t.notes);
+      const syncedNotes=withRentMeta(t.notes,{
+        calculated:calculatedStayRentSolo(t),
+        override:due,
+        overrideBy:staffLabel(getSession()?.user?.id)||role()||'staff',
+        overrideAt:new Date().toISOString(),
+        overrideNote:prevRent.overrideNote||'Synced from Payment Action edit'
+      });
+      try{
+        await patch('tenancies',`id=eq.${t.id}`,{notes:syncedNotes});
+        t.notes=syncedNotes;
+        const ti=state.tenancies.findIndex(x=>Number(x.id)===Number(t.id));
+        if(ti>=0)state.tenancies[ti]={...state.tenancies[ti],notes:syncedNotes};
+      }catch(_){}
+    }
     const probe={...existing,notes,amount:due};
     const paid=actionPaidAmount(probe);
     const remaining=Math.max(0,Number((due-paid).toFixed(2)));

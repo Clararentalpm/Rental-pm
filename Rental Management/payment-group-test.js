@@ -29,7 +29,8 @@ Object.assign(S,{
   tenants:[{id:1,name:'辣豆'},{id:2,name:'Vicky'},{id:3,name:'Solo'},{id:4,name:'ShortGuest'},{id:5,name:'InstalmentGuest'}],
   tenancies:[
     {id:10,tenant_id:1,room_id:2,check_in:'2026-09-01',check_out:'2026-09-20',rent_amount:280,rent_period:'week',payment_cycle_weeks:1,status:'active',tenancy_type:'long_term'},
-    {id:11,tenant_id:2,room_id:2,check_in:'2026-09-01',check_out:'2026-09-13',rent_amount:280,rent_period:'week',payment_cycle_weeks:1,status:'active',tenancy_type:'long_term'},
+    // Checkout must stay in the future relative to "today" so both remain in the active schedule group.
+    {id:11,tenant_id:2,room_id:2,check_in:'2026-09-01',check_out:'2026-09-20',rent_amount:280,rent_period:'week',payment_cycle_weeks:1,status:'active',tenancy_type:'long_term'},
     {id:12,tenant_id:3,room_id:2,check_in:'2026-08-01',check_out:null,rent_amount:200,rent_period:'week',payment_cycle_weeks:1,status:'active',tenancy_type:'long_term'},
     {id:13,tenant_id:4,room_id:8,check_in:'2026-09-10',check_out:'2026-09-17',rent_amount:50,rent_period:'day',status:'active',tenancy_type:'short_term'},
     {id:14,tenant_id:5,room_id:8,check_in:'2026-09-01',check_out:'2026-09-14',rent_amount:300,rent_period:'total',status:'active',tenancy_type:'short_term'}

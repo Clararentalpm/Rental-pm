@@ -1774,12 +1774,14 @@ function overviewPage(){
   const demand=demandSignal(fwd30);
   const revpar=revenuePerAvailableRoom(actualMonth, occupancyStats(monthStart,monthEnd));
   const cards=rooms.map(r=>{
+    // Source of truth: only currently-valid Stay/Booking rows for this room.
     const cur=currentOccupantsForRoom(r.id);
     const next=nextBookingForRoom(r.id);
     const rp=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
     const rentLine=(()=>{
       if(!cur.length)return '';
-      // One rate line per live payment group among CURRENT occupants only.
+      // One clean rate line per live payment group among CURRENT occupants only.
+      // Never concatenate historical/cancelled rates onto the card.
       const groups=new Map();
       cur.forEach(t=>{
         const live=activePaymentGroupMembers(t).filter(x=>cur.some(c=>Number(c.id)===Number(x.id)));
@@ -1791,15 +1793,16 @@ function overviewPage(){
           const amt=(typeof finalAmountDue==='function'?finalAmountDue(t):null)??t.rent_amount;
           const nights=stayNights(t);
           if(isOneOffStay(t)&&nights)return `Shared stay · ${money(amt)} total / ${nights} night${nights===1?'':'s'}`;
-          return `Shared stay · ${money(amt)} / ${esc(t.rent_period||'period')}`;
+          return `Shared stay · ${money(amt)} / ${esc(rateUnitLabel(t.rent_period)||t.rent_period||'period')}`;
         }
-        return `${money(t.rent_amount)} / ${esc(t.rent_period||'period')}`;
-      }).join(' · ');
+        if(typeof formatRentalRate==='function')return formatRentalRate(t);
+        return `${money(t.rent_amount)} / ${esc(rateUnitLabel(t.rent_period)||t.rent_period||'period')}`;
+      }).join('<br>');
     })();
     const occupantLabel=cur.length
       ?cur.map(t=>esc(tenantBy(t.tenant_id)?.name||'Tenant')).join(' + ')
       :'<span class="muted">Vacant now</span>';
-    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+    return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
       <div class="occupant">${occupantLabel}</div>
       <div class="subline">${rentLine}</div>
       ${next?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}</div>`:''}

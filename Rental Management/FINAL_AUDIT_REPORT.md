@@ -20,8 +20,8 @@
 | 13 | Duplicate inspections | Double-submit | Busy disable + identical visitor/room/time guard |
 | 14 | Checkout off-by-one | Inclusive end day | Half-open `[check_in, check_out)` globally |
 | 15 | Room 2 shared rent | Group members double-counted in UI | Payment-group primary + shared rate line |
-| 19–25 | Room Status duplicates (Laura×N, Blackgun×N, Room 6) | Past/cancelled/future stays treated as current; sofa as Room 6 | Strict occupancy helpers; McGregor room_no 6 → Sofa; cancelled excluded from departures/groups |
-| 26 | Occupancy regressions | Missing scenarios | Added automated room-status cases in consistency audit test |
+| 19–25 | Room Status duplicates (Laura×N, Blackgun×N, Room 6) | Past/cancelled/future stays treated as current; sofa as Room 6 | `isCurrentOccupancyStay` / `currentOccupantsForRoom` / `nextBookingForRoom`; McGregor `room_no` 6 → Sofa via `isSofaRoom`; cancelled excluded from groups/blocking/income; clean current-only rate via `formatRentalRate` / `rateUnitLabel` |
+| 26 | Occupancy regressions | Missing scenarios | Dedicated `room-status-occupancy-regression-test.js` A–J |
 
 ## 2. Bugs vs expected
 
@@ -31,15 +31,18 @@
 ## 3. Files changed
 
 - `Rental Management/index.html` — shared logic + UI
-- `Rental Management/consistency-audit-regression-test.js` — new regression suite
+- `Rental Management/consistency-audit-regression-test.js` — regression suite
+- `Rental Management/room-status-occupancy-regression-test.js` — A–J occupancy scenarios
 - `Rental Management/supabase_carindale_room4_ensuite_fix.sql` — preview + update (not run)
 - `Rental Management/AUDIT_DUPLICATE_INSPECTIONS.md`
 - `Rental Management/AUDIT_ROOM_STATUS_DUPLICATES.md`
+- `Rental Management/FINAL_AUDIT_REPORT.md`
 
 ## 4. Schema / migration
 
 - **Required for Carindale R4:** run `supabase_carindale_room4_ensuite_fix.sql` after owner approval.
 - No other production migration in this PR.
+- Do **not** delete cancelled/legacy stays to “fix” UI — status filtering is the fix.
 
 ## 5. Test results (all pass)
 
@@ -53,10 +56,37 @@
 - final-regression-test.js
 - laura-short-stay-regression-test.js
 - consistency-audit-regression-test.js (10 checks including room-status occupancy)
+- **room-status-occupancy-regression-test.js** — scenarios **A–J** (**12/12 PASS**)
+
+### A–J occupancy results (fixed date 2026-09-13)
+
+| ID | Scenario | Result |
+|----|----------|--------|
+| A | Current stay → occupant appears | PASS |
+| B | Past stay → excluded | PASS |
+| C | Cancelled stay → excluded | PASS |
+| D | Future → Next only, not Current | PASS |
+| E | Ongoing long-term (null checkout) → Current | PASS |
+| F | Multiple historical stays → one current stay id | PASS |
+| G | Historical+cancelled+current Laura → only stay `503` | PASS |
+| H | Blackgun / Iris alias → stay+tenant ids traced; no name merge | PASS |
+| I | Sofa/Extra Room ≠ Room 6 | PASS |
+| J | Cancelled excluded from block/next/actions/income paths | PASS |
+
+Plus UI assertions (Laura once, Vacant now, clean `$35 / night`, no past Aura) and post-checkout disappearance.
+
+### Duplicate / legacy records reported (not deleted)
+
+Fixture IDs used in regression (mirrors production shape; production IDs differ):
+
+- **Room 5:** past stay `501`, cancelled `502`; **current** `503` (Laura); future `504` (NextGuest)
+- **Sofa:** past Blackgun `601` (tenant 20), cancelled Iris `602` (tenant 21), cancelled future Iris `604`; **current** Blackgun `603` (tenant 20)
+
+Production SQL diagnostics remain in `AUDIT_ROOM_STATUS_DUPLICATES.md` — run read-only; do not auto-delete.
 
 ## 6. Screenshots
 
-See walkthrough artifacts:
+Walkthrough artifacts:
 
 - financial_dashboard_room_status.png
 - availability_find_result_panels.png
@@ -65,7 +95,10 @@ See walkthrough artifacts:
 - carindale_room4_no_ensuite.png
 - payments_schedule_filters.png
 - integrity_sms_checkout_notes.png
+- **room-status-corrected-grid.webp** (items 19–25)
+- **room-status-occupants-detail.webp**
+- **room-status-occupancy-regression-results.txt**
 
 ## Stop
 
-Waiting for approval before merge, deploy, or production SQL.
+Waiting for approval before merge, deploy, or production SQL. **Do not merge. Do not deploy.**

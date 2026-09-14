@@ -87,6 +87,22 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 .income-note{font-size:12px;color:var(--muted)}.income-history{margin-top:0}
 @media(max-width:1150px){.income-card-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:650px){.income-card-grid{grid-template-columns:1fr}.income-card{min-height:125px}}
+</style>
+<style>
+/* Multi-room inspection chips + multi-select; multi-segment stay cards */
+.chip-row{display:flex;flex-wrap:wrap;gap:6px;min-height:28px;margin:4px 0 8px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:var(--accentSoft);color:#294b91;font-size:12px;font-weight:750}
+.chip button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0;font-weight:800}
+.multi-select-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;max-height:180px;overflow:auto;padding:8px;border:1px solid var(--line);border-radius:10px;background:#fafbfc}
+.multi-select-list label{display:flex;align-items:center;gap:8px;font-weight:650;font-size:13px;margin:0;cursor:pointer}
+.multi-select-list input[type=checkbox]{width:auto;margin:0}
+.segment-card{border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:12px;background:#fafbfd}
+.segment-card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.segment-card-head b{font-size:14px}
+.segment-list{display:grid;gap:0}
+#stay-add-segment{margin-top:10px}
+.journey-segments{margin-top:6px;font-size:12px;color:var(--muted)}
+.journey-segments div{margin-top:2px}
 </style></head>
 <body>
 <div id="boot" class="boot"><div style="display:flex;align-items:center;gap:14px"><div class="spinner"></div><div><strong>Starting Rental PM…</strong><div class="muted small">This screen will not stay stuck indefinitely.</div></div></div></div>
@@ -161,35 +177,17 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="stay-dialog"><form id="stay-form" class="dialog-body">
-  <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Add a new tenant and allocate a room.</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
+  <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Add a new tenant and allocate one or more room / date periods (one tenant row).</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Tenant name<input name="name" required></label>
     <label>Contact method<input name="contact_method" placeholder="Phone / WeChat / Email"></label>
-    <label>Room<select name="room_id" required></select></label>
-    <label>Stay type<select name="tenancy_type"><option value="long_term">Long term</option><option value="short_term">Short stay</option></select></label>
-    <label>Check-in date<input name="check_in" type="date"></label>
-    <label>Check-in time<input name="check_in_time" type="time"></label>
-    <label style="display:flex;gap:8px;align-items:center;justify-content:flex-start;grid-column:1/-1"><input id="stay-ongoing" name="ongoing" type="checkbox" style="width:auto"> Ongoing / No confirmed check-out date</label>
-    <label>Check-out date<input name="check_out" type="date"></label>
-    <label>Check-out time<input name="check_out_time" type="time"></label>
-    <label>Rental rate<input name="rent_amount" type="number" step="0.01" min="0"></label>
-    <label>Rate unit<select name="rent_period">
-      <option value="night">per night</option>
-      <option value="week">per week</option>
-      <option value="fortnight">per fortnight</option>
-      <option value="four_weeks">per 4 weeks</option>
-      <option value="total">fixed total</option>
-    </select></label>
-    <label>Payment cycle (weeks)<input name="payment_cycle_weeks" type="number" min="1" placeholder="Optional for weekly cycles"></label>
-    <label>People count<input name="people_count" type="number" min="1" value="1"></label>
-    <label><span>Bills included</span><select name="bills_included"><option value="false">No</option><option value="true">Yes</option></select></label>
   </div>
+  <div id="stay-segments" class="segment-list" aria-label="Stay room / date periods"></div>
+  <button type="button" id="stay-add-segment" class="btn ghost">+ Add another room / date period</button>
   <div id="stay-rent-preview" class="note" style="margin-top:12px">Enter dates and rate to see calculated rent.</div>
   <div class="form-grid" style="margin-top:12px">
-    <label>Calculated rent<input name="calculated_rent_display" type="text" readonly placeholder="—"></label>
-    <label>Manual override (optional)<input name="rent_override" type="number" step="0.01" min="0" placeholder="Leave blank to use calculated"></label>
-    <label>Final rent<input name="final_rent_display" type="text" readonly placeholder="—"></label>
-    <label>Override note<input name="rent_override_note" placeholder="Reason for override (optional)"></label>
+    <label>Calculated rent (all segments)<input name="calculated_rent_display" type="text" readonly placeholder="—"></label>
+    <label>Booking total<input name="final_rent_display" type="text" readonly placeholder="—"></label>
   </div>
   <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
   <div id="stay-error" class="error hidden"></div>
@@ -366,7 +364,11 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
     <label>Visitor name<input name="visitor_name" required placeholder="Prospective tenant"></label>
     <label>Contact<input name="contact_method" placeholder="Phone / WeChat / Email"></label>
     <label>Property<select name="property_id" required></select></label>
-    <label>Room<select name="room_id" required></select></label>
+    <label style="grid-column:1/-1">Rooms (select one or more)
+      <input type="hidden" name="room_id" id="viewing-primary-room" required>
+      <div id="viewing-room-chips" class="chip-row" aria-live="polite"></div>
+      <div id="viewing-room-multi" class="multi-select-list" role="group" aria-label="Inspection rooms"></div>
+    </label>
     <label>Inspection date<input name="inspection_date" type="date" required></label>
     <label>Inspection time<input name="inspection_time" type="time" required></label>
     <label>People coming<input name="people_count" type="number" min="1" value="1"></label>
@@ -538,6 +540,149 @@ function nextBookingForRoom(roomId,onDate=today()){
 function stayActiveOn(t,onDate=today()){
   return isCurrentOccupancyStay(t,onDate);
 }
+/** Note marker helpers (no schema change — encode multi-room / multi-segment in notes). */
+function parseNoteMarker(notes,key){
+  if(!key)return null;
+  const m=String(notes||'').match(new RegExp('(?:^|\\n)'+String(key).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':([^\\n]*)'));
+  return m?String(m[1]).trim():null;
+}
+function stripNoteMarker(notes,key){
+  if(!key)return String(notes||'');
+  return String(notes||'')
+    .replace(new RegExp('(?:^|\\n)'+String(key).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':[^\\n]*','g'),'')
+    .replace(/^\n+|\n+$/g,'')
+    .trim();
+}
+function upsertNoteMarker(notes,key,value){
+  const base=stripNoteMarker(notes,key);
+  if(value==null||value==='')return base;
+  return (base?base+'\n':'')+`${key}:${value}`;
+}
+function encodeViewingRoomIds(ids){
+  const uniq=[...new Set((ids||[]).map(Number).filter(n=>Number.isFinite(n)&&n>0))].sort((a,b)=>a-b);
+  return uniq.length?uniq.join(','):'';
+}
+function viewingRoomIds(v){
+  const raw=parseNoteMarker(v?.notes,'ROOM_IDS');
+  if(raw){
+    const ids=raw.split(/[,\s]+/).map(Number).filter(n=>Number.isFinite(n)&&n>0);
+    if(ids.length){
+      const uniq=[...new Set(ids)].sort((a,b)=>a-b);
+      // Always include primary room_id when present
+      if(v?.room_id!=null&&v.room_id!==''&&!uniq.includes(Number(v.room_id)))uniq.push(Number(v.room_id));
+      return [...new Set(uniq)].sort((a,b)=>a-b);
+    }
+  }
+  if(v?.room_id!=null&&v.room_id!=='')return [Number(v.room_id)];
+  return [];
+}
+function joinHumanList(items){
+  const arr=(items||[]).filter(Boolean);
+  if(!arr.length)return '';
+  if(arr.length===1)return arr[0];
+  if(arr.length===2)return `${arr[0]} & ${arr[1]}`;
+  return `${arr.slice(0,-1).join(', ')} & ${arr[arr.length-1]}`;
+}
+function viewingRoomsLabel(v){
+  const ids=viewingRoomIds(v);
+  if(!ids.length)return '—';
+  return ids.map(id=>roomShortName(roomBy(id))).join(', ');
+}
+function mergeViewingNotesWithRooms(notes,ids){
+  const encoded=encodeViewingRoomIds(ids);
+  let n=stripNoteMarker(notes,'ROOM_IDS');
+  if(encoded)n=upsertNoteMarker(n,'ROOM_IDS',encoded);
+  return n||null;
+}
+function bookingGroupId(t){
+  return parseNoteMarker(t?.notes,'BOOKING_GROUP')||null;
+}
+function bookingSegments(t){
+  if(!t)return [];
+  const gid=bookingGroupId(t);
+  if(!gid)return [t];
+  return (state.tenancies||[])
+    .filter(x=>bookingGroupId(x)===gid&&Number(x.tenant_id)===Number(t.tenant_id))
+    .slice()
+    .sort((a,b)=>{
+      const ia=Number(parseNoteMarker(a.notes,'SEGMENT_INDEX')||0);
+      const ib=Number(parseNoteMarker(b.notes,'SEGMENT_INDEX')||0);
+      if(ia!==ib)return ia-ib;
+      return (a.check_in||'').localeCompare(b.check_in||'')||Number(a.id)-Number(b.id);
+    });
+}
+function bookingJourneyLabel(t){
+  const all=bookingSegments(t);
+  const active=all.filter(x=>!isCancelledOrNoShow(x));
+  const use=active.length?active:all;
+  if(!use.length)return '—';
+  const first=use[0], last=use[use.length-1];
+  const start=fmtDate(first.check_in);
+  const end=last.check_out?fmtDate(last.check_out):(last.confirmed_until?fmtDate(last.confirmed_until):'Ongoing');
+  const rooms=[];
+  for(const s of use){
+    const lbl=roomShortName(roomBy(s.room_id));
+    if(rooms[rooms.length-1]!==lbl)rooms.push(lbl);
+  }
+  return `${start} → ${end} · ${rooms.join(' → ')}`;
+}
+function bookingGroupObligation(t){
+  if(!t)return 0;
+  return bookingSegments(t)
+    .filter(x=>!(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due'))
+    .reduce((s,x)=>s+expectedStayTotalSolo(x),0);
+}
+function bookingGroupBreakdown(t){
+  const segs=bookingSegments(t).filter(x=>!(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due'));
+  const parts=segs.map(s=>`${roomShortName(roomBy(s.room_id))}: ${money(expectedStayTotalSolo(s))}`);
+  const total=segs.reduce((s,x)=>s+expectedStayTotalSolo(x),0);
+  return {label:parts.length?`${parts.join(' + ')} = ${money(total)}`:'—',total,segments:segs};
+}
+function isBookingGroupPrimary(t){
+  if(!t)return false;
+  const gid=bookingGroupId(t);
+  if(!gid)return true;
+  const segs=bookingSegments(t);
+  const payable=segs.filter(x=>!(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due'));
+  // Prefer non-historical segments so schedule/actions follow the live part of a journey.
+  const active=payable.filter(x=>tenancyKind(x)!=='historical');
+  const pool=active.length?active:(payable.length?payable:segs);
+  if(!pool.length)return false;
+  const primary=pool.slice().sort((a,b)=>{
+    const ia=Number(parseNoteMarker(a.notes,'SEGMENT_INDEX')||999);
+    const ib=Number(parseNoteMarker(b.notes,'SEGMENT_INDEX')||999);
+    if(ia!==ib)return ia-ib;
+    return Number(a.id)-Number(b.id);
+  })[0];
+  return Number(primary.id)===Number(t.id);
+}
+function newBookingGroupId(){
+  if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID();
+  return 'bg-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+}
+function roomsAvailabilityConflicts(roomIds,start,end){
+  return [...new Set((roomIds||[]).map(Number).filter(Boolean))].filter(id=>roomOccupiedOverlap(id,start,end));
+}
+function roomsAvailabilityNote(roomIds,start,end){
+  const ids=[...new Set((roomIds||[]).map(Number).filter(Boolean))];
+  if(!ids.length)return 'Choose at least one room.';
+  if(!start)return 'Add intended check-in to check availability (optional but recommended).';
+  if(end&&end<=start)return 'Intended check-out must be after check-in.';
+  const conflicts=roomsAvailabilityConflicts(ids,start,end);
+  if(conflicts.length){
+    const names=conflicts.map(id=>roomShortName(roomBy(id)));
+    return `${joinHumanList(names)} look${conflicts.length===1?'s':''} occupied for ${fmtDate(start)}${end?` → ${fmtDate(end)}`:''}. Check Availability calendar before promising ${conflicts.length===1?'this room':'these rooms'}.`;
+  }
+  const labels=ids.map(id=>roomShortName(roomBy(id)));
+  return `${joinHumanList(labels)} appear${ids.length===1?'s':''} available for ${fmtDate(start)}${end?` → ${fmtDate(end)}`:' (open-ended)'}.`;
+}
+function displayCleanNotes(notes){
+  let n=String(notes||'');
+  for(const key of ['ROOM_IDS','BOOKING_GROUP','SEGMENT_INDEX','SEGMENT_COUNT','CALCULATED_RENT','RENT_OVERRIDE','RENT_OVERRIDE_BY','RENT_OVERRIDE_AT','RENT_OVERRIDE_NOTE','REMINDER_SENT','CANCEL_DATE','CANCEL_REASON','CANCELLED_BY','DEPOSIT_TREATMENT','RENT_TREATMENT','ORIGINAL_AMOUNT','PAYMENT_ID','AMOUNT_LOCKED','MANUAL_AMOUNT','PAYMENT_CURRENCY','ACTION_ID','IDEMPOTENCY_KEY','EXTRA_ROOM_FEE']){
+    n=stripNoteMarker(n,key);
+  }
+  return n.trim();
+}
 function activePaymentGroupMembers(t,onDate=today()){
   const members=paymentGroupMembers(t).filter(x=>stayActiveOn(x,onDate));
   return members.length?members:(stayActiveOn(t,onDate)?[t]:[]);
@@ -548,6 +693,7 @@ function scheduleGroupMembers(t){
   return members.length?members:[t];
 }
 function isPaymentGroupPrimary(t){
+  if(bookingGroupId(t))return isBookingGroupPrimary(t);
   const members=scheduleGroupMembers(t);
   if(!members.some(x=>Number(x.id)===Number(t.id)))return false;
   if(members.length<=1)return true;
@@ -591,6 +737,11 @@ function expectedRentAmount(t){
   return amt;
 }
 function paymentGroupExpectedAmount(t){
+  if(bookingGroupId(t)){
+    return bookingSegments(t)
+      .filter(x=>tenancyKind(x)!=='historical'&&!(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due'))
+      .reduce((s,x)=>s+expectedRentAmount(x),0);
+  }
   return scheduleGroupMembers(t).reduce((s,x)=>s+expectedRentAmount(x),0);
 }
 /** Checkout date is source of truth; confirmed_until kept only as legacy fallback. */
@@ -674,25 +825,6 @@ function syncPaymentCycleFromRate(f){
   if(u==='fortnight'&&!f.elements.payment_cycle_weeks.value)f.elements.payment_cycle_weeks.value='2';
   if(u==='four_weeks'&&!f.elements.payment_cycle_weeks.value)f.elements.payment_cycle_weeks.value='4';
   if(u==='week'&&!f.elements.payment_cycle_weeks.value)f.elements.payment_cycle_weeks.value='1';
-}
-function updateStayRentPreview(){
-  const f=$('#stay-form');if(!f)return;
-  const ongoing=!!$('#stay-ongoing')?.checked;
-  if(f.elements.check_out){f.elements.check_out.disabled=ongoing;if(ongoing)f.elements.check_out.value=''}
-  if(f.elements.check_out_time){f.elements.check_out_time.disabled=ongoing;if(ongoing)f.elements.check_out_time.value=''}
-  syncPaymentCycleFromRate(f);
-  const t=provisionalStayFromForm(f,{ongoingChecked:ongoing});
-  const calc=calculatedStayRentSolo(t);
-  const final=expectedStayTotalSolo(t);
-  const bd=stayChargeBreakdown(t);
-  if(f.elements.calculated_rent_display)f.elements.calculated_rent_display.value=t.check_in?(money(calc)+ (normalizeRateUnit(t.rent_period)==='night'&&bd.nights!=null?` (${bd.nights} nights)`:'')):'—';
-  if(f.elements.final_rent_display)f.elements.final_rent_display.value=t.check_in?money(final):'—';
-  const box=$('#stay-rent-preview');
-  if(box){
-    if(ongoing)box.textContent='Ongoing stay — room stays Occupied until a check-out date is set. '+formatRentalRate(t);
-    else if(!t.check_in||t.rent_amount==null)box.textContent='Enter dates and rate to see calculated rent.';
-    else box.textContent=bd.label;
-  }
 }
 function updateTenancyRentPreview(){
   const f=$('#tenancy-form');if(!f)return;
@@ -788,6 +920,14 @@ function stayChargeBreakdown(t){
  */
 function obligationMembers(t){
   if(!t)return [];
+  if(bookingGroupId(t)){
+    const segs=bookingSegments(t).filter(x=>{
+      if(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due')return false;
+      if(tenancyKind(x)==='historical')return false;
+      return true;
+    });
+    return segs.length?segs:[t];
+  }
   const members=paymentGroupMembers(t).filter(x=>{
     if(isCancelledOrNoShow(x)&&rentTreatment(x)!=='keep_due')return false;
     if(tenancyKind(x)==='historical')return false;
@@ -825,6 +965,8 @@ function finalAmountDue(t){
   if(!t)return 0;
   const locked=lockedManualObligation(t);
   if(locked!=null)return Number(locked);
+  // Multi-segment booking group: sum each segment's solo total (no double-count).
+  if(bookingGroupId(t))return Number(bookingGroupObligation(t).toFixed(2));
   if(isOneOffStay(t))return Number(expectedStayTotalSolo(t).toFixed(2));
   return Number(obligationMembers(t).reduce((s,x)=>s+expectedStayTotalSolo(x),0).toFixed(2));
 }
@@ -832,6 +974,11 @@ function expectedStayTotal(t){
   return finalAmountDue(t);
 }
 function groupPaymentAmount(t){
+  if(bookingGroupId(t)){
+    const ids=new Set(bookingSegments(t).map(x=>Number(x.id)));
+    return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
+      .reduce((s,p)=>s+Number(p.amount||0),0);
+  }
   // Count payments across the full room+check-in group (incl. historical) so coverage is not lost.
   const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
   return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
@@ -885,7 +1032,9 @@ function tenancyPayments(t){
     .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
 function groupTenancyPayments(t){
-  const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
+  const ids=bookingGroupId(t)
+    ? new Set(bookingSegments(t).map(x=>Number(x.id)))
+    : new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
   return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&p.period_end)
     .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
@@ -908,8 +1057,13 @@ function nextRentDue(t){
 function suggestPaymentPeriod(t){
   if(!t)return {start:today(),end:today(),amount:0};
   if(isOneOffStay(t)){
-    const start=t.check_in||today();
-    const end=stayEndDate(t)||start;
+    const segs=bookingGroupId(t)?bookingSegments(t).filter(x=>!isCancelledOrNoShow(x)||rentTreatment(x)==='keep_due'):[t];
+    const start=(segs[0]&&segs[0].check_in)||t.check_in||today();
+    let end=stayEndDate(t)||start;
+    for(const s of segs){
+      const e=stayEndDate(s);
+      if(e&&e>end)end=e;
+    }
     const remaining=stayBalanceDue(t);
     return {start,end,amount:remaining>0?remaining:expectedStayTotal(t)};
   }
@@ -1029,11 +1183,22 @@ function tenancyKind(t){
 /** Best stay to show for a tenant profile row on the *current property* tab. */
 function tenantProfileRow(tenant,propertyId=state.propertyId){
   const stays=tenantStaysOnProperty(tenant.id,propertyId);
-  if(!stays.length)return {tenant,stay:null,p:null,r:null,kind:'historical',onProperty:false};
+  if(!stays.length)return {tenant,stay:null,p:null,r:null,kind:'historical',onProperty:false,journey:null,segments:[]};
+  // Prefer current/upcoming primary booking-group segment when present
   const ranked=stays.map(t=>({t,kind:tenancyKind(t)}));
-  const pick=ranked.find(x=>x.kind==='current')||ranked.find(x=>x.kind==='upcoming')||ranked.slice().sort((a,b)=>Number(b.t.id)-Number(a.t.id))[0];
+  let pick=ranked.find(x=>x.kind==='current'&&(!bookingGroupId(x.t)||isBookingGroupPrimary(x.t)))
+    ||ranked.find(x=>x.kind==='current')
+    ||ranked.find(x=>x.kind==='upcoming'&&(!bookingGroupId(x.t)||isBookingGroupPrimary(x.t)))
+    ||ranked.find(x=>x.kind==='upcoming')
+    ||ranked.slice().sort((a,b)=>Number(b.t.id)-Number(a.t.id))[0];
+  if(pick?.t&&bookingGroupId(pick.t)&&!isBookingGroupPrimary(pick.t)){
+    const primary=bookingSegments(pick.t).find(isBookingGroupPrimary);
+    if(primary)pick={t:primary,kind:tenancyKind(primary)};
+  }
   const stay=pick.t, kind=pick.kind, r=stay?roomBy(stay.room_id):null, p=r?propertyBy(r.property_id):null;
-  return {tenant,stay,p,r,kind,onProperty:true};
+  const segments=stay?bookingSegments(stay):[];
+  const journey=stay&&(bookingGroupId(stay)||segments.length>1)?bookingJourneyLabel(stay):null;
+  return {tenant,stay,p,r,kind,onProperty:true,journey,segments};
 }
 function badge(v){
   const label=String(v??'').replaceAll('_',' ');
@@ -1109,12 +1274,14 @@ function paymentsLinkedToAction(a){
   const byId=new Set(meta.paymentIds||[]);
   if(a?.related_payment_id)byId.add(Number(a.related_payment_id));
   const t=state.tenancies.find(x=>Number(x.id)===Number(a?.tenancy_id));
-  const ids=t?new Set(paymentGroupMembers(t).map(x=>Number(x.id))):new Set([Number(a?.tenancy_id)]);
+  const ids=t
+    ? new Set((bookingGroupId(t)?bookingSegments(t):paymentGroupMembers(t)).map(x=>Number(x.id)))
+    : new Set([Number(a?.tenancy_id)]);
   return state.payments.filter(p=>{
     if(!isCountedPayment(p))return false;
     if(byId.has(Number(p.id)))return true;
     // Fallback: one-off stay — all counted group payments apply to the stay obligation.
-    if(t&&isOneOffStay(t)&&ids.has(Number(p.tenancy_id)))return true;
+    if(t&&(isOneOffStay(t)||bookingGroupId(t))&&ids.has(Number(p.tenancy_id)))return true;
     // Marker in payment notes
     if(a?.id&&String(p.notes||'').includes(`ACTION_ID:${a.id}`))return true;
     return false;
@@ -1287,7 +1454,7 @@ function findConfidentExistingPayment(a){
   const t=state.tenancies.find(x=>Number(x.id)===Number(a?.tenancy_id));
   if(!t)return null;
   const explicit=explicitlyLinkedPaymentIds(a);
-  const groupIds=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
+  const groupIds=new Set((bookingGroupId(t)?bookingSegments(t):paymentGroupMembers(t)).map(x=>Number(x.id)));
   const original=actionOriginalAmount(a,t);
   const stayStart=t.check_in||null;
   const stayEnd=stayEndDate(t);
@@ -1393,6 +1560,12 @@ async function runPaymentActionReconcile({silent=false}={}){
 function relatedBookingLabel(t){
   if(!t)return '—';
   const prop=propertyBy(roomBy(t.room_id)?.property_id);
+  if(bookingGroupId(t)){
+    const rooms=bookingSegments(t).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id)));
+    const uniq=[];
+    for(const r of rooms){if(uniq[uniq.length-1]!==r)uniq.push(r)}
+    return `${prop?.name||'Property'} ${uniq.join(' → ')||roomLabel(t.room_id)} · ${tenantBy(t.tenant_id)?.name||'Tenant'}`;
+  }
   return `${prop?.name||'Property'} ${roomLabel(t.room_id)} · ${tenantBy(t.tenant_id)?.name||'Tenant'}`;
 }
 function virtualPaymentAction(t){
@@ -1855,11 +2028,20 @@ function tenantsPage(){
   return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — McGregor and Carindale tenants stay on their own property tab. Current = still staying. Past = already checked out.</span></div></div>
   <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, room, stay type or notes on this property…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Property / Room</th><th>Stay</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-  ${rows.map(({tenant,stay,p,r,kind})=>{
+  ${rows.map(({tenant,stay,p,r,kind,journey,segments})=>{
     const b=stay?bondForTenancy(stay.id):null;
     const ev=(state.bookingEvents||[]).filter(e=>Number(e.tenancy_id)===Number(stay?.id)).slice(0,3);
     const statusLbl=stay&&isCancelledOrNoShow(stay)?bookingStatusLabel(stay):(kind==='historical'?'past':kind);
-    return `<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes,statusLbl].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(tenant.notes||'')}</div></td><td>${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div></td><td>${stay?`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`:'—'}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div>${stay?.cancellation_reason||depositTreatment(stay)?`<div class="muted small">Cancel: ${esc(stay.cancellation_reason||depositTreatment(stay))}</div>`:''}${b?`<div class="muted small">Deposit ${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')} · ${esc(bondDepositStatus(b))}</div>`:''}${ev.length?`<div class="muted small">${ev.map(x=>esc(x.event_type)).join(' · ')}</div>`:''}</td><td>${stay?formatRentalRate(stay):'—'}${stay&&isCancelledOrNoShow(stay)&&rentTreatment(stay)!=='keep_due'?`<div class="muted small">Rent not payable</div>`:''}</td><td>${stay?badge(statusLbl):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}${stay&&!isCancelledOrNoShow(stay)?`<button class="btn ghost cancel-booking-row" data-tenancy="${stay.id}">Cancel booking</button>`:''}</div>`:'—'}</td></tr>`;
+    const staySummary=stay?(journey||`${fmtDate(stay.check_in)} → ${stay.check_out?fmtDate(stay.check_out):'Ongoing'}`):'—';
+    const segLines=(segments&&segments.length>1)?`<div class="journey-segments">${segments.map(s=>{
+      const idx=parseNoteMarker(s.notes,'SEGMENT_INDEX')||'';
+      const st=isCancelledOrNoShow(s)?'cancelled':tenancyKind(s);
+      return `<div>${idx?`#${esc(idx)} · `:''}${fmtDate(s.check_in)} → ${s.check_out?fmtDate(s.check_out):'Ongoing'} · ${esc(roomShortName(roomBy(s.room_id)))} · ${esc(st)}</div>`;
+    }).join('')}</div>`:'';
+    const roomCell=journey
+      ? `${esc(p?.name||'—')}<div class="muted small">${esc(bookingSegments(stay).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id))).filter((v,i,a)=>a.indexOf(v)===i).join(' → '))}</div>`
+      : `${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div>`;
+    return `<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes,statusLbl,journey].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(displayCleanNotes(tenant.notes)||'')}</div></td><td>${roomCell}</td><td>${esc(staySummary)}${segLines}<div class="muted small">${esc((stay?.tenancy_type||'').replace('_',' '))}</div>${stay?.cancellation_reason||depositTreatment(stay)?`<div class="muted small">Cancel: ${esc(stay.cancellation_reason||depositTreatment(stay))}</div>`:''}${b?`<div class="muted small">Deposit ${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')} · ${esc(bondDepositStatus(b))}</div>`:''}${ev.length?`<div class="muted small">${ev.map(x=>esc(x.event_type)).join(' · ')}</div>`:''}</td><td>${stay?formatRentalRate(stay):'—'}${stay&&bookingGroupId(stay)?`<div class="muted small">${esc(bookingGroupBreakdown(stay).label)}</div>`:''}${stay&&isCancelledOrNoShow(stay)&&rentTreatment(stay)!=='keep_due'?`<div class="muted small">Rent not payable</div>`:''}</td><td>${stay?badge(statusLbl):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}${stay&&!isCancelledOrNoShow(stay)?`<button class="btn ghost cancel-booking-row" data-tenancy="${stay.id}">Cancel booking</button>`:''}</div>`:'—'}</td></tr>`;
   }).join('')||`<tr><td colspan="6" class="muted">No tenants for ${esc(propName)} in this filter.</td></tr>`}</tbody></table></div></section>`;
 }
 function getExtraRoomFee(p){
@@ -2028,7 +2210,7 @@ function availabilityPage(){
     const active=ts.filter(t=>!isCancelledOrNoShow(t)&&stayBlocksDate(t,iso));
     const departing=ts.filter(t=>!isCancelledOrNoShow(t)&&(t.check_out||t.confirmed_until)===iso&&!active.some(a=>Number(a.id)===Number(t.id)));
     const chips=[...active,...departing].map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=(t.check_out||t.confirmed_until)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?roomChipLabel(roomBy(t.room_id)):(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
-    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>Insp</b> ${esc(v.visitor_name||'Visitor')} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
+    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>Insp</b> ${esc(v.visitor_name||'Visitor')} · ${esc(viewingRoomsLabel(v))} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
     cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||''}${viewChips||''}${!(chips||viewChips)?'<div class="muted small">Available</div>':''}</div>`;
   }
   return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · purple chips = booked inspections</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}<div class="legend" style="margin-top:0"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
@@ -2048,12 +2230,11 @@ function viewingsPage(){
   <div class="tenant-tools"><div class="view-switch">${['upcoming','current','past','all'].map(x=>`<button class="${filter===x?'active':''}" data-vfilter="${x}">${x[0].toUpperCase()+x.slice(1)}</button>`).join('')}</div><button type="button" class="btn ghost" id="goto-availability">Open Availability</button></div>
   <div class="table-wrap"><table><thead><tr><th>When</th><th>Visitor</th><th>Room</th><th>People</th><th>加床</th><th>Intended stay</th><th>Deposit</th><th>Notes</th><th>Status</th><th>Action</th></tr></thead><tbody>
   ${rows.map(({v,kind})=>{
-    const r=roomBy(v.room_id);
     const nights=v.intended_nights||((v.intended_check_in&&v.intended_check_out)?Math.max(0,Math.round((new Date(v.intended_check_out+'T00:00:00')-new Date(v.intended_check_in+'T00:00:00'))/86400000)):null);
     const stayLbl=v.intended_check_in?`${fmtDate(v.intended_check_in)}${v.intended_check_out?` → ${fmtDate(v.intended_check_out)}`:''}${nights!==null?`<div class="muted small">${nights} night${nights===1?'':'s'} · ${esc((v.intended_tenancy_type||'').replace('_',' ')||'stay')}</div>`:`<div class="muted small">${esc((v.intended_tenancy_type||'').replace('_',' ')||'')}</div>`}`:'—';
     const dep=v.deposit_paid?`<b style="color:var(--green)">Paid</b>${v.deposit_amount?`<div class="muted small">${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</div>`:''}`:'<span class="muted">Not yet</span>';
     const when=`${fmtDate(v.inspection_date)}${v.inspection_time?`<div class="muted small">${esc(String(v.inspection_time).slice(0,5))}</div>`:''}`;
-    return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(r?roomShortName(r):'—')}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(v.notes||'')}</td><td>${badge(kind)}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>${!v.deposit_paid?`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`:''}<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button></div>`:'—'}</td></tr>`;
+    return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(viewingRoomsLabel(v))}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(displayCleanNotes(v.notes)||'')}</td><td>${badge(kind)}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>${!v.deposit_paid?`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`:''}<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button></div>`:'—'}</td></tr>`;
   }).join('')||`<tr><td colspan="10" class="muted">No ${esc(filter)} inspections for ${esc(prop?.name||'this property')}.</td></tr>`}
   </tbody></table></div></section>`;
 }
@@ -2129,14 +2310,17 @@ function paymentsPage(){
     const st=paymentActionLiveStatus(a);
     const related=`<button type="button" class="linkbtn open-source-booking" data-tenancy="${a.tenancy_id}">Related Booking: ${esc(relatedBookingLabel(t))}</button>${a.related_payment_id?`<div class="muted small">Related Payment: #${esc(a.related_payment_id)}</div>`:''}${a.related_bond_id?`<div class="muted small">Bond / Deposit: ${esc((()=>{const b=(state.bonds||[]).find(x=>Number(x.id)===Number(a.related_bond_id));return b?bondOptionLabel(b):('#'+a.related_bond_id);})())}</div>`:''}`;
     const staff=`${a.created_by?`<div class="muted small">Created ${esc(staffLabel(a.created_by))}</div>`:''}${a.last_modified_by?`<div class="muted small">Modified ${esc(staffLabel(a.last_modified_by))}</div>`:''}${a.resolved_by?`<div class="muted small">Resolved ${esc(staffLabel(a.resolved_by))}</div>`:''}${a.virtual?'<div class="muted small">Derived (not yet saved)</div>':''}`;
-    const breakdown=t?stayChargeBreakdown(t):null;
+    const breakdown=t?(bookingGroupId(t)?bookingGroupBreakdown(t):stayChargeBreakdown(t)):null;
     const showAmt=actionDisplayAmount(a);
     const paidAmt=actionPaidAmount(a);
     const origAmt=actionOriginalAmount(a,t);
-    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLabel(a.room_id||t?.room_id))}</div></td><td>${related}</td><td>${esc((a.action_type||'rent_due').replace('_',' '))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
+    const roomLbl=t&&bookingGroupId(t)
+      ? bookingSegments(t).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id))).filter((v,i,a)=>a.indexOf(v)===i).join(', ')
+      : roomLabel(a.room_id||t?.room_id);
+    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLbl)}</div></td><td>${related}</td><td>${esc((a.action_type||'rent_due').replace('_',' '))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
   }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions in this filter.</div>'}</section>`;
   return `${actionPanel}
-  <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Cancelled bookings excluded.</div></div></div>
+  <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Multi-room booking groups show once (sum of segments). Cancelled bookings excluded.</div></div></div>
   <div class="schedule-tools">
     <label>Search<input id="schedule-search" placeholder="Tenant, room, property" value="${esc(state.scheduleSearch||'')}"></label>
     <label>Status<select id="schedule-status">
@@ -2150,7 +2334,11 @@ function paymentsPage(){
   </div>
   <div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Cycle</th><th>Next due</th><th>Amount expected</th><th>Status</th></tr></thead><tbody>${dueRowsFiltered.map(t=>{
     const members=scheduleGroupMembers(t);
-    return `<tr><td>${esc(paymentGroupName(t))}${members.length>1?`<div class="muted small">Shared payment group</div>`:''}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomLabel(t.room_id))}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
+    const roomCell=bookingGroupId(t)
+      ? bookingSegments(t).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id))).filter((v,i,a)=>a.indexOf(v)===i).join(' → ')
+      : roomLabel(t.room_id);
+    const bgNote=bookingGroupId(t)?`<div class="muted small">Multi-room booking · ${esc(bookingGroupBreakdown(t).label)}</div>`:(members.length>1?`<div class="muted small">Shared payment group</div>`:'');
+    return `<tr><td>${esc(paymentGroupName(t))}${bgNote}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomCell)}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
   }).join('')||'<tr><td colspan="6" class="muted">No active rent schedule rows.</td></tr>'}</tbody></table></div></section>
   <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotesOrDash(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
 }
@@ -2337,27 +2525,65 @@ function render(){
 function tenancyOptions(){
   return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
 }
-function fillViewingPropertyRooms(f,{propertyId,roomId}={}){
+function fillViewingPropertyRooms(f,{propertyId,roomIds,roomId}={}){
   const pid=Number(propertyId||f.elements.property_id.value||state.propertyId);
   f.elements.property_id.innerHTML=state.properties.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   f.elements.property_id.value=String(pid);
   const rooms=state.rooms.filter(r=>Number(r.property_id)===pid).slice().sort((a,b)=>Number(a.room_no)-Number(b.room_no));
-  f.elements.room_id.innerHTML=rooms.map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('')||'<option value="">No rooms</option>';
-  if(roomId&&rooms.some(r=>Number(r.id)===Number(roomId)))f.elements.room_id.value=String(roomId);
-  else if(rooms[0])f.elements.room_id.value=String(rooms[0].id);
+  let selected=[...(roomIds||[])].map(Number).filter(Boolean);
+  if(!selected.length&&roomId)selected=[Number(roomId)];
+  if(!selected.length&&rooms[0])selected=[Number(rooms[0].id)];
+  selected=[...new Set(selected)].sort((a,b)=>a-b);
+  const box=$('#viewing-room-multi');
+  if(box){
+    box.innerHTML=rooms.map(r=>{
+      const checked=selected.includes(Number(r.id))?'checked':'';
+      return `<label><input type="checkbox" class="viewing-room-cb" value="${r.id}" ${checked}> ${esc(roomOptionLabel(r))}</label>`;
+    }).join('')||'<div class="muted small">No rooms</div>';
+  }
+  syncViewingPrimaryRoom(f);
+  renderViewingRoomChips(f);
+}
+function selectedViewingRoomIds(f){
+  const boxes=[...document.querySelectorAll('#viewing-room-multi .viewing-room-cb:checked')];
+  const ids=boxes.map(b=>Number(b.value)).filter(Boolean);
+  return [...new Set(ids)].sort((a,b)=>a-b);
+}
+function syncViewingPrimaryRoom(f){
+  const ids=selectedViewingRoomIds(f);
+  const primary=ids[0]||'';
+  if(f?.elements?.room_id)f.elements.room_id.value=primary?String(primary):'';
+  return ids;
+}
+function renderViewingRoomChips(f){
+  const row=$('#viewing-room-chips');if(!row)return;
+  const ids=selectedViewingRoomIds(f);
+  row.innerHTML=ids.length
+    ?ids.map(id=>`<span class="chip">${esc(roomShortName(roomBy(id)))}<button type="button" data-uncheck-room="${id}" aria-label="Remove">×</button></span>`).join('')
+    :'<span class="muted small">Select at least one room</span>';
+  row.querySelectorAll('[data-uncheck-room]').forEach(btn=>{
+    btn.onclick=()=>{
+      const cb=document.querySelector(`#viewing-room-multi .viewing-room-cb[value="${btn.dataset.uncheckRoom}"]`);
+      if(cb){cb.checked=false;syncViewingPrimaryRoom(f);renderViewingRoomChips(f);updateViewingAvailabilityHint(f)}
+    };
+  });
 }
 function updateViewingAvailabilityHint(f){
   const box=$('#viewing-availability');if(!box||!f)return;
-  const note=roomAvailabilityNote(f.elements.room_id.value,f.elements.intended_check_in.value||null,f.elements.intended_check_out.value||null);
-  const conflict=roomOccupiedOverlap(f.elements.room_id.value,f.elements.intended_check_in.value||null,f.elements.intended_check_out.value||null);
+  const ids=syncViewingPrimaryRoom(f);
+  const start=f.elements.intended_check_in.value||null;
+  const end=f.elements.intended_check_out.value||null;
+  const note=roomsAvailabilityNote(ids,start,end);
+  const conflict=roomsAvailabilityConflicts(ids,start,end).length>0;
   box.className=conflict?'error':'note';
   box.style.marginTop='12px';
   box.textContent=note;
 }
 function bindViewingFormLive(f){
-  const refresh=()=>updateViewingAvailabilityHint(f);
+  const refresh=()=>{syncViewingPrimaryRoom(f);renderViewingRoomChips(f);updateViewingAvailabilityHint(f)};
   f.elements.property_id.onchange=()=>{fillViewingPropertyRooms(f,{propertyId:f.elements.property_id.value});refresh()};
-  f.elements.room_id.onchange=refresh;
+  const box=$('#viewing-room-multi');
+  if(box)box.onchange=refresh;
   f.elements.intended_check_in.onchange=refresh;
   f.elements.intended_check_out.onchange=refresh;
   refresh();
@@ -2373,7 +2599,7 @@ function openViewing(opts={}){
   f.elements.intended_tenancy_type.value='short_term';
   f.elements.inspection_date.value=today();
   f.elements.inspection_time.value='10:00';
-  fillViewingPropertyRooms(f,{propertyId:state.propertyId,roomId:opts.roomId});
+  fillViewingPropertyRooms(f,{propertyId:state.propertyId,roomId:opts.roomId,roomIds:opts.roomIds});
   bindViewingFormLive(f);
   $('#viewing-dialog-title').textContent='Book room inspection';
   $('#viewing-error').classList.add('hidden');
@@ -2388,7 +2614,7 @@ function openEditViewing(id){
   const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v)return;
   const f=$('#viewing-form');f.reset();
   f.elements.id.value=String(v.id);
-  fillViewingPropertyRooms(f,{propertyId:v.property_id||state.propertyId,roomId:v.room_id});
+  fillViewingPropertyRooms(f,{propertyId:v.property_id||state.propertyId,roomIds:viewingRoomIds(v),roomId:v.room_id});
   f.elements.visitor_name.value=v.visitor_name||'';
   f.elements.contact_method.value=v.contact_method||'';
   f.elements.inspection_date.value=v.inspection_date||'';
@@ -2401,7 +2627,7 @@ function openEditViewing(id){
   f.elements.deposit_paid.value=v.deposit_paid?'true':'false';
   f.elements.deposit_amount.value=v.deposit_amount??'';
   f.elements.deposit_currency.value=v.deposit_currency==='CNY'?'CNY':'AUD';
-  f.elements.notes.value=v.notes||'';
+  f.elements.notes.value=displayCleanNotes(v.notes)||'';
   bindViewingFormLive(f);
   $('#viewing-dialog-title').textContent='Edit room inspection';
   $('#viewing-error').classList.add('hidden');
@@ -2419,9 +2645,10 @@ function emailServiceConfigured(){
 }
 function viewingReminderMessage(v){
   const prop=propertyBy(v.property_id)?.name||property()?.name||'the property';
-  const room=v.room_id?roomShortName(roomBy(v.room_id)):'room';
+  const rooms=viewingRoomIds(v).map(id=>roomShortName(roomBy(id)));
+  const roomPart=joinHumanList(rooms.length?rooms:['room']);
   const when=`${fmtDate(v.inspection_date)} at ${String(v.inspection_time||'').slice(0,5)}`;
-  return `Room inspection reminder: ${when} at ${prop} (${room}). Please confirm you can attend.`;
+  return `Room inspection: ${prop} ${roomPart} — ${when}.`;
 }
 async function sendViewingReminder(id, method){
   if(!canEdit())return;
@@ -2431,7 +2658,7 @@ async function sendViewingReminder(id, method){
   if(last && !confirm(`A reminder was already logged (${last[1]}). Send another?`))return;
   const recipient=v.contact_method||'';
   if(!recipient){alert('Add a contact method (phone/email) on this inspection first.');return}
-  const payload={to:recipient, body:viewingReminderMessage(v), viewing_id:v.id, method, property:propertyBy(v.property_id)?.name, room:roomShortName(roomBy(v.room_id)), inspection_date:v.inspection_date, inspection_time:v.inspection_time};
+  const payload={to:recipient, body:viewingReminderMessage(v), viewing_id:v.id, method, property:propertyBy(v.property_id)?.name, room:viewingRoomsLabel(v), rooms:viewingRoomIds(v), inspection_date:v.inspection_date, inspection_time:v.inspection_time};
   try{
     if(method==='sms'){
       if(!smsServiceConfigured()){ if(status)status.textContent='SMS service not configured'; alert('SMS service not configured'); return; }
@@ -2472,7 +2699,134 @@ async function markViewingDeposit(id){
     await loadAll();
   }catch(e){alert(e.message)}
 }
-function openStay(){const sel=$('#stay-form select[name=room_id]');sel.innerHTML=currentPropertyRooms().map(r=>`<option value="${r.id}">${esc(roomOptionLabel(r))}</option>`).join('');$('#stay-dialog').showModal()}
+function staySegmentCardHtml(idx,rooms,data={}){
+  const roomOpts=rooms.map(r=>`<option value="${r.id}" ${Number(data.room_id)===Number(r.id)?'selected':''}>${esc(roomOptionLabel(r))}</option>`).join('')||'<option value="">No rooms</option>';
+  const type=data.tenancy_type||'short_term';
+  const period=data.rent_period||'night';
+  const removeBtn=idx>0?`<button type="button" class="linkbtn remove-segment">Remove</button>`:'<span class="muted small">Primary period</span>';
+  return `<div class="segment-card" data-seg="${idx}">
+    <div class="segment-card-head"><b>Room / date period ${idx+1}</b>${removeBtn}</div>
+    <div class="form-grid">
+      <label>Room<select class="seg-room" required>${roomOpts}</select></label>
+      <label>Stay type<select class="seg-type"><option value="long_term" ${type==='long_term'?'selected':''}>Long term</option><option value="short_term" ${type==='short_term'?'selected':''}>Short stay</option></select></label>
+      <label>Check-in date<input class="seg-check-in" type="date" value="${esc(data.check_in||'')}"></label>
+      <label>Check-in time<input class="seg-check-in-time" type="time" value="${esc((data.check_in_time||'').slice(0,5))}"></label>
+      <label style="display:flex;gap:8px;align-items:center;justify-content:flex-start;grid-column:1/-1"><input class="seg-ongoing" type="checkbox" style="width:auto" ${data.ongoing?'checked':''}> Ongoing / No confirmed check-out date</label>
+      <label>Check-out date<input class="seg-check-out" type="date" value="${esc(data.check_out||'')}" ${data.ongoing?'disabled':''}></label>
+      <label>Check-out time<input class="seg-check-out-time" type="time" value="${esc((data.check_out_time||'').slice(0,5))}" ${data.ongoing?'disabled':''}></label>
+      <label>Rental rate<input class="seg-rent-amount" type="number" step="0.01" min="0" value="${data.rent_amount!=null?esc(data.rent_amount):''}"></label>
+      <label>Rate unit<select class="seg-rent-period">
+        ${['night','week','fortnight','four_weeks','total'].map(u=>`<option value="${u}" ${period===u?'selected':''}>${({night:'per night',week:'per week',fortnight:'per fortnight',four_weeks:'per 4 weeks',total:'fixed total'})[u]}</option>`).join('')}
+      </select></label>
+      <label>Payment cycle (weeks)<input class="seg-payment-cycle" type="number" min="1" placeholder="Optional" value="${data.payment_cycle_weeks!=null?esc(data.payment_cycle_weeks):''}"></label>
+      <label>People count<input class="seg-people" type="number" min="1" value="${esc(data.people_count||1)}"></label>
+      <label>Bills included<select class="seg-bills"><option value="false" ${data.bills_included?'':'selected'}>No</option><option value="true" ${data.bills_included?'selected':''}>Yes</option></select></label>
+      <label>Manual override (optional)<input class="seg-rent-override" type="number" step="0.01" min="0" placeholder="Leave blank" value="${data.rent_override!=null?esc(data.rent_override):''}"></label>
+      <label>Override note<input class="seg-rent-override-note" placeholder="Reason (optional)" value="${esc(data.rent_override_note||'')}"></label>
+    </div>
+  </div>`;
+}
+function bindStaySegmentCard(card){
+  if(!card)return;
+  const ongoing=card.querySelector('.seg-ongoing');
+  const syncOngoing=()=>{
+    const on=!!ongoing?.checked;
+    const co=card.querySelector('.seg-check-out'), cot=card.querySelector('.seg-check-out-time');
+    if(co){co.disabled=on;if(on)co.value=''}
+    if(cot){cot.disabled=on;if(on)cot.value=''}
+    updateStayRentPreview();
+  };
+  if(ongoing)ongoing.onchange=syncOngoing;
+  card.querySelectorAll('input,select').forEach(el=>el.addEventListener('input',updateStayRentPreview));
+  const rm=card.querySelector('.remove-segment');
+  if(rm)rm.onclick=()=>{card.remove();renumberStaySegments();updateStayRentPreview()};
+}
+function renumberStaySegments(){
+  $$('#stay-segments .segment-card').forEach((card,i)=>{
+    card.dataset.seg=String(i);
+    const title=card.querySelector('.segment-card-head b');
+    if(title)title.textContent=`Room / date period ${i+1}`;
+    const headRight=card.querySelector('.segment-card-head').children[1];
+    if(i===0){
+      if(headRight&&headRight.classList.contains('remove-segment'))headRight.outerHTML='<span class="muted small">Primary period</span>';
+    }
+  });
+}
+function addStaySegment(data={}){
+  const wrap=$('#stay-segments');if(!wrap)return;
+  const rooms=currentPropertyRooms();
+  const idx=$$('#stay-segments .segment-card').length;
+  wrap.insertAdjacentHTML('beforeend',staySegmentCardHtml(idx,rooms,data));
+  const card=wrap.lastElementChild;
+  bindStaySegmentCard(card);
+  updateStayRentPreview();
+  return card;
+}
+function collectStaySegmentsFromForm(){
+  return $$('#stay-segments .segment-card').map(card=>{
+    const ongoing=!!card.querySelector('.seg-ongoing')?.checked;
+    const rent_amount=card.querySelector('.seg-rent-amount')?.value;
+    const overrideRaw=card.querySelector('.seg-rent-override')?.value;
+    let payment_cycle_weeks=card.querySelector('.seg-payment-cycle')?.value?Number(card.querySelector('.seg-payment-cycle').value):null;
+    const rent_period=card.querySelector('.seg-rent-period')?.value||'week';
+    const u=normalizeRateUnit(rent_period);
+    if(payment_cycle_weeks==null){
+      if(u==='week')payment_cycle_weeks=1;
+      else if(u==='fortnight')payment_cycle_weeks=2;
+      else if(u==='four_weeks')payment_cycle_weeks=4;
+    }
+    return {
+      room_id:Number(card.querySelector('.seg-room')?.value||0),
+      tenancy_type:card.querySelector('.seg-type')?.value||'short_term',
+      check_in:card.querySelector('.seg-check-in')?.value||null,
+      check_in_time:card.querySelector('.seg-check-in-time')?.value||null,
+      check_out:ongoing?null:(card.querySelector('.seg-check-out')?.value||null),
+      check_out_time:ongoing?null:(card.querySelector('.seg-check-out-time')?.value||null),
+      ongoing,
+      rent_amount:rent_amount!==''&&rent_amount!=null?Number(rent_amount):null,
+      rent_period,
+      payment_cycle_weeks,
+      people_count:Number(card.querySelector('.seg-people')?.value||1),
+      bills_included:card.querySelector('.seg-bills')?.value==='true',
+      rent_override:overrideRaw!==''&&overrideRaw!=null?Number(overrideRaw):null,
+      rent_override_note:card.querySelector('.seg-rent-override-note')?.value||''
+    };
+  });
+}
+function openStay(){
+  const f=$('#stay-form');
+  if(f)f.reset();
+  const wrap=$('#stay-segments');
+  if(wrap)wrap.innerHTML='';
+  addStaySegment({tenancy_type:'short_term',rent_period:'night',people_count:1});
+  const addBtn=$('#stay-add-segment');
+  if(addBtn)addBtn.onclick=()=>addStaySegment({tenancy_type:'short_term',rent_period:'night',people_count:1});
+  $('#stay-error')?.classList.add('hidden');
+  updateStayRentPreview();
+  $('#stay-dialog').showModal();
+}
+function updateStayRentPreview(){
+  const f=$('#stay-form');if(!f)return;
+  const segs=collectStaySegmentsFromForm();
+  let calcTotal=0, finalTotal=0;
+  const labels=[];
+  for(const s of segs){
+    const tLike={check_in:s.check_in,check_out:s.check_out,confirmed_until:null,rent_amount:s.rent_amount,rent_period:s.rent_period,payment_cycle_weeks:s.payment_cycle_weeks,tenancy_type:s.tenancy_type,notes:s.rent_override!=null?`RENT_OVERRIDE:${s.rent_override}`:''};
+    const calc=calculatedStayRentSolo(tLike);
+    const fin=expectedStayTotalSolo(tLike);
+    calcTotal+=calc; finalTotal+=fin;
+    if(s.check_in&&s.rent_amount!=null)labels.push(`${roomShortName(roomBy(s.room_id))}: ${stayChargeBreakdown(tLike).label}`);
+  }
+  if(f.elements.calculated_rent_display)f.elements.calculated_rent_display.value=segs.some(s=>s.check_in)?money(calcTotal):'—';
+  if(f.elements.final_rent_display)f.elements.final_rent_display.value=segs.some(s=>s.check_in)?money(finalTotal):'—';
+  const box=$('#stay-rent-preview');
+  if(box){
+    if(!segs.length)box.textContent='Add at least one room / date period.';
+    else if(segs.every(s=>s.ongoing))box.textContent='Ongoing stay segment(s) — room stays Occupied until a check-out date is set.';
+    else if(segs.some(s=>!s.check_in||s.rent_amount==null))box.textContent='Enter dates and rate on each segment to see calculated rent.';
+    else box.textContent=labels.join(' · ') + (segs.length>1?` · Booking total ${money(finalTotal)}`:'');
+  }
+}
 function applyPaymentPeriodDefaults(f,t,{force=false,fillAmount=false}={}){
   if(!t||!f)return;
   const sug=suggestPaymentPeriod(t);
@@ -2891,31 +3245,62 @@ $('#property-form').onsubmit=async e=>{
 $('#stay-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#stay-error');err.classList.add('hidden');
   try{
-    const ongoing=!!$('#stay-ongoing')?.checked||fd.get('ongoing')==='on';
-    const check_out=ongoing?null:(fd.get('check_out')||null);
-    const check_out_time=ongoing?null:(fd.get('check_out_time')||null);
-    if(!ongoing&&!check_out&&fd.get('tenancy_type')==='short_term'){
-      err.textContent='Short stays need an explicit check-out date (or mark Ongoing).';err.classList.remove('hidden');return;
+    const segs=collectStaySegmentsFromForm();
+    if(!segs.length){err.textContent='Add at least one room / date period.';err.classList.remove('hidden');return}
+    for(let i=0;i<segs.length;i++){
+      const s=segs[i];
+      if(!s.room_id){err.textContent=`Segment ${i+1}: choose a room.`;err.classList.remove('hidden');return}
+      if(!s.ongoing&&!s.check_out&&s.tenancy_type==='short_term'){
+        err.textContent=`Segment ${i+1}: short stays need an explicit check-out date (or mark Ongoing).`;err.classList.remove('hidden');return;
+      }
+      if(s.check_in&&s.check_out&&s.check_out<=s.check_in){
+        err.textContent=`Segment ${i+1}: check-out must be after check-in.`;err.classList.remove('hidden');return;
+      }
+      if(s.check_in&&roomOccupiedOverlap(s.room_id,s.check_in,s.check_out||null)){
+        if(!confirm(`${roomAvailabilityNote(s.room_id,s.check_in,s.check_out||null)}\n\nSave segment ${i+1} anyway?`)){return}
+      }
     }
-    const tr=await insert('tenants',{name:fd.get('name'),contact_method:fd.get('contact_method')||null,notes:'Created in Rental PM V6'});const tenant=tr?.[0];if(!tenant?.id)throw new Error('Tenant ID was not returned.');
-    const ci=fd.get('check_in')||null;
-    const rent_amount=fd.get('rent_amount')?Number(fd.get('rent_amount')):null;
-    const rent_period=fd.get('rent_period')||'week';
-    let payment_cycle_weeks=fd.get('payment_cycle_weeks')?Number(fd.get('payment_cycle_weeks')):null;
-    const u=normalizeRateUnit(rent_period);
-    if(payment_cycle_weeks==null){
-      if(u==='week')payment_cycle_weeks=1;
-      else if(u==='fortnight')payment_cycle_weeks=2;
-      else if(u==='four_weeks')payment_cycle_weeks=4;
+    const tr=await insert('tenants',{name:fd.get('name'),contact_method:fd.get('contact_method')||null,notes:'Created in Rental PM V6'});
+    const tenant=tr?.[0];if(!tenant?.id)throw new Error('Tenant ID was not returned.');
+    const multi=segs.length>1;
+    const groupId=multi?newBookingGroupId():null;
+    const baseNotes=String(fd.get('notes')||'').trim();
+    let primaryCreated=null;
+    for(let i=0;i<segs.length;i++){
+      const s=segs[i];
+      const tLike={check_in:s.check_in,check_out:s.check_out,confirmed_until:null,rent_amount:s.rent_amount,rent_period:s.rent_period,payment_cycle_weeks:s.payment_cycle_weeks,tenancy_type:s.tenancy_type};
+      let notes=buildStayNotesWithRent(baseNotes,tLike,s.rent_override,s.rent_override_note||'',null);
+      if(multi){
+        notes=upsertNoteMarker(notes,'BOOKING_GROUP',groupId);
+        notes=upsertNoteMarker(notes,'SEGMENT_INDEX',String(i+1));
+        notes=upsertNoteMarker(notes,'SEGMENT_COUNT',String(segs.length));
+      }
+      const tenancyRows=await insert('tenancies',{
+        room_id:Number(s.room_id),
+        tenant_id:tenant.id,
+        tenancy_type:s.tenancy_type,
+        check_in:s.check_in,
+        check_in_time:s.check_in_time||null,
+        check_out:s.check_out,
+        check_out_time:s.check_out_time||null,
+        confirmed_until:null,
+        rent_amount:s.rent_amount,
+        rent_period:s.rent_period,
+        payment_cycle_weeks:s.payment_cycle_weeks,
+        people_count:Number(s.people_count||1),
+        bills_included:!!s.bills_included,
+        status:s.check_in&&s.check_in>today()?'upcoming':'active',
+        notes
+      });
+      if(i===0)primaryCreated=tenancyRows?.[0]||null;
     }
-    const tLike={check_in:ci,check_out,confirmed_until:null,rent_amount,rent_period,payment_cycle_weeks,tenancy_type:fd.get('tenancy_type')};
-    const override=fd.get('rent_override')!==''&&fd.get('rent_override')!=null?Number(fd.get('rent_override')):null;
-    const notes=buildStayNotesWithRent(fd.get('notes')||'',tLike,override,fd.get('rent_override_note')||'',null);
-    // Write check_out as source of truth; clear legacy confirmed_until.
-    const tenancyRows=await insert('tenancies',{room_id:Number(fd.get('room_id')),tenant_id:tenant.id,tenancy_type:fd.get('tenancy_type'),check_in:ci,check_in_time:fd.get('check_in_time')||null,check_out,check_out_time,confirmed_until:null,rent_amount,rent_period,payment_cycle_weeks,people_count:Number(fd.get('people_count')||1),bills_included:fd.get('bills_included')==='true',status:ci&&ci>today()?'upcoming':'active',notes});
-    f.reset();$('#stay-dialog').close();toast('New stay saved');await loadAll();
+    f.reset();
+    const wrap=$('#stay-segments');if(wrap)wrap.innerHTML='';
+    $('#stay-dialog').close();
+    toast(multi?`New multi-room stay saved (${segs.length} periods)`:'New stay saved');
+    await loadAll();
     try{
-      const created=tenancyRows?.[0] || (state.tenancies||[]).slice().reverse().find(x=>Number(x.tenant_id)===Number(tenant.id) && Number(x.room_id)===Number(fd.get('room_id')));
+      const created=primaryCreated || (state.tenancies||[]).slice().reverse().find(x=>Number(x.tenant_id)===Number(tenant.id));
       if(created && typeof needsPaymentAction==='function' && needsPaymentAction(created) && typeof recreateActionForTenancy==='function'){
         await recreateActionForTenancy(created,'Created with new stay');
         await loadAll();
@@ -3039,7 +3424,9 @@ $('#viewing-form').onsubmit=async e=>{
   const saveBtn=$('#save-viewing-btn')||f.querySelector('button.primary');
   if(saveBtn?.dataset.busy==='1')return;
   if(saveBtn){saveBtn.dataset.busy='1';saveBtn.disabled=true;}
-  const roomId=Number(fd.get('room_id'));
+  const roomIds=selectedViewingRoomIds(f);
+  syncViewingPrimaryRoom(f);
+  const roomId=Number(fd.get('room_id')||roomIds[0]||0);
   const propertyId=Number(fd.get('property_id'));
   const inspection_date=fd.get('inspection_date')||null;
   let inspection_time=String(fd.get('inspection_time')||'').trim();
@@ -3048,15 +3435,18 @@ $('#viewing-form').onsubmit=async e=>{
   const intended_check_out=fd.get('intended_check_out')||null;
   const clearViewingBusy=()=>{if(saveBtn){saveBtn.dataset.busy='';saveBtn.disabled=false}};
   if(!fd.get('visitor_name')?.toString().trim()){err.textContent='Visitor name is required.';err.classList.remove('hidden');clearViewingBusy();return}
+  if(!roomIds.length||!roomId){err.textContent='Select at least one room.';err.classList.remove('hidden');clearViewingBusy();return}
   if(!inspection_date||!inspection_time){err.textContent='Inspection date and time are required.';err.classList.remove('hidden');clearViewingBusy();return}
   if(intended_check_in&&intended_check_out&&intended_check_out<=intended_check_in){err.textContent='Intended check-out must be after check-in.';err.classList.remove('hidden');clearViewingBusy();return}
-  if(intended_check_in&&roomOccupiedOverlap(roomId,intended_check_in,intended_check_out)){
-    if(!confirm(roomAvailabilityNote(roomId,intended_check_in,intended_check_out)+'\n\nSave this inspection anyway?')){clearViewingBusy();return}
+  const conflicts=intended_check_in?roomsAvailabilityConflicts(roomIds,intended_check_in,intended_check_out):[];
+  if(conflicts.length){
+    if(!confirm(roomsAvailabilityNote(roomIds,intended_check_in,intended_check_out)+'\n\nSave this inspection anyway?')){clearViewingBusy();return}
   }
   const nights=intended_check_in&&intended_check_out
     ?Math.max(0,Math.round((new Date(intended_check_out+'T00:00:00')-new Date(intended_check_in+'T00:00:00'))/86400000))
     :null;
   const depositPaid=fd.get('deposit_paid')==='true';
+  const notes=mergeViewingNotesWithRooms(fd.get('notes')||'',roomIds);
   const row={
     property_id:propertyId,
     room_id:roomId,
@@ -3073,7 +3463,7 @@ $('#viewing-form').onsubmit=async e=>{
     deposit_paid:depositPaid,
     deposit_amount:fd.get('deposit_amount')===''||fd.get('deposit_amount')==null?null:Number(fd.get('deposit_amount')),
     deposit_currency:fd.get('deposit_currency')==='CNY'?'CNY':'AUD',
-    notes:fd.get('notes')||null,
+    notes,
     status:'scheduled',
     updated_at:new Date().toISOString()
   };
@@ -3170,11 +3560,12 @@ $('#tenancy-form').onsubmit=async e=>{
     $('#tenancy-dialog').close();toast('Tenancy updated');await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
-$('#stay-ongoing').onchange=()=>updateStayRentPreview();
+const stayOngoingEl=$('#stay-ongoing'); if(stayOngoingEl) stayOngoingEl.onchange=()=>updateStayRentPreview();
 ['check_in','check_in_time','check_out','check_out_time','rent_amount','rent_period','payment_cycle_weeks','rent_override','rent_override_note'].forEach(n=>{
-  const a=$('#stay-form')?.elements?.[n]; if(a) a.addEventListener('input',updateStayRentPreview);
   const b=$('#tenancy-form')?.elements?.[n]; if(b) b.addEventListener('input',updateTenancyRentPreview);
 });
+const stayAddSegBtn=$('#stay-add-segment');
+if(stayAddSegBtn) stayAddSegBtn.onclick=()=>addStaySegment({tenancy_type:'short_term',rent_period:'night',people_count:1});
 $('#no-checkout').onchange=e=>{const f=$('#tenancy-form'),on=e.target.checked;['check_out','check_out_time'].forEach(k=>{if(f.elements[k]){f.elements[k].disabled=on;if(on)f.elements[k].value=''}});updateTenancyRentPreview()};
 $('#end-tenancy').onclick=async()=>{
   if(!canEdit())return;

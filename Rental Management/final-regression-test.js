@@ -17,7 +17,8 @@ const cut = script.search(/\$\('#nav'\)\.onclick|\$\("#nav"\)\.onclick|\$\('#nav
 let defs = (cut > 0 ? script.slice(0, cut) : script)
   .replace(/\blet state=/, 'var state=')
   .replace(/\blet resendBusy=/, 'var resendBusy=')
-  .replace(/\bconst money=/, 'var money=');
+  .replace(/\bconst money=/, 'var money=')
+  .replace(/\bconst today=/, 'var today=');
 
 const store = {};
 const el = () => ({
@@ -98,6 +99,9 @@ sandbox.globalThis = sandbox;
 sandbox.self = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(defs, sandbox, { timeout: 8000 });
+
+// Pin calendar day so paid-through 2026-09-14 still counts as "paid" (not due today).
+sandbox.today = () => '2026-09-14';
 
 const S = sandbox.state;
 function seed(extra) {

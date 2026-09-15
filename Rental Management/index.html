@@ -431,7 +431,7 @@ const today=()=>new Date().toISOString().slice(0,10);
 const money=(v,c='AUD')=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('en-AU',{style:'currency',currency:c,maximumFractionDigits:0}).format(Number(v));
 const fmtDate=v=>v?new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(v+'T00:00:00')):'—';
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
-let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property'};
+let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'current',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property'};
 
 function getSession(){try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch{return null}}
 function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
@@ -594,6 +594,365 @@ function mergeViewingNotesWithRooms(notes,ids){
   if(encoded)n=upsertNoteMarker(n,'ROOM_IDS',encoded);
   return n||null;
 }
+/** Linked tenancy/payment/action/bond ids encoded on the inspection notes (no schema change). */
+function viewingLinkedTenancyId(v){
+  const raw=parseNoteMarker(v?.notes,'TENANCY_ID');
+  const n=raw!=null&&raw!==''?Number(raw):NaN;
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function viewingLinkedPaymentId(v){
+  const raw=parseNoteMarker(v?.notes,'DEPOSIT_PAYMENT_ID')||parseNoteMarker(v?.notes,'PAYMENT_ID');
+  const n=raw!=null&&raw!==''?Number(raw):NaN;
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function viewingLinkedActionId(v){
+  const raw=parseNoteMarker(v?.notes,'DEPOSIT_ACTION_ID');
+  const n=raw!=null&&raw!==''?Number(raw):NaN;
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function viewingLinkedBondId(v){
+  const raw=parseNoteMarker(v?.notes,'BOND_ID');
+  const n=raw!=null&&raw!==''?Number(raw):NaN;
+  return Number.isFinite(n)&&n>0?n:null;
+}
+function isDepositPayment(p){
+  const typ=String(parseNoteMarker(p?.notes,'PAYMENT_TYPE')||'').toLowerCase();
+  return typ==='deposit';
+}
+function viewingDepositIdempotencyKey(viewingId){
+  return `viewing-deposit-${viewingId}`;
+}
+function findDepositPaymentForViewing(viewingId){
+  const key=viewingDepositIdempotencyKey(viewingId);
+  return (state.payments||[]).find(p=>{
+    if(!isDepositPayment(p)&&!String(p?.notes||'').includes(key))return false;
+    const ik=parseNoteMarker(p?.notes,'IDEMPOTENCY_KEY');
+    return ik===key||String(p?.notes||'').includes(`IDEMPOTENCY_KEY:${key}`);
+  })||null;
+}
+function findTenantByExactName(name){
+  const n=String(name||'').trim().toLowerCase();
+  if(!n)return null;
+  return (state.tenants||[]).find(t=>String(t.name||'').trim().toLowerCase()===n)||null;
+}
+/**
+ * Inspection → deposit → confirmed stay lifecycle stage (markers + flags + linked tenancy).
+ * Values: inspection_scheduled | inspection_completed | deposit_paid | stay_confirmed | cancelled
+ */
+function viewingLifecycleStage(v){
+  if(!v)return 'cancelled';
+  const st=String(v.status||'').toLowerCase();
+  if(st==='cancelled'||st==='canceled')return 'cancelled';
+  const life=String(parseNoteMarker(v.notes,'LIFECYCLE')||'').toLowerCase();
+  if(life==='cancelled')return 'cancelled';
+  const tid=viewingLinkedTenancyId(v);
+  if(tid){
+    const t=(state.tenancies||[]).find(x=>Number(x.id)===Number(tid));
+    if(t&&!isCancelledOrNoShow(t))return 'stay_confirmed';
+    if(t&&isCancelledOrNoShow(t))return 'cancelled';
+  }
+  if(v.deposit_paid||life==='deposit_paid')return 'deposit_paid';
+  if(life==='stay_confirmed')return 'stay_confirmed';
+  const inspDone=parseNoteMarker(v.notes,'INSPECTION_COMPLETED');
+  if(inspDone||st==='completed'||(v.inspection_date&&v.inspection_date<today()))return 'inspection_completed';
+  return 'inspection_scheduled';
+}
+function viewingLifecycleBadgesHtml(v){
+  if(!v)return '';
+  const stage=viewingLifecycleStage(v);
+  const chips=[];
+  if(stage==='cancelled'){
+    chips.push('<span class="badge cancelled">Cancelled</span>');
+  }else{
+    if(stage==='inspection_completed'||stage==='deposit_paid'||stage==='stay_confirmed'||(v.inspection_date&&v.inspection_date<today())||parseNoteMarker(v.notes,'INSPECTION_COMPLETED')||String(v.status||'').toLowerCase()==='completed'){
+      chips.push('<span class="badge current">Inspection Completed</span>');
+    }else if(stage==='inspection_scheduled'){
+      chips.push('<span class="badge upcoming">Inspection Scheduled</span>');
+    }
+    if(v.deposit_paid||stage==='deposit_paid'||stage==='stay_confirmed'){
+      const amt=v.deposit_amount!=null?`<span class="muted small"> ${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</span>`:'';
+      chips.push(`<span class="badge current">Deposit Paid</span>${amt}`);
+    }
+    if(stage==='stay_confirmed'){
+      chips.push('<span class="badge current">Booking Confirmed</span>');
+    }
+  }
+  const tid=viewingLinkedTenancyId(v);
+  if(tid&&stage==='stay_confirmed'&&canEdit()){
+    chips.push(`<button type="button" class="btn ghost open-viewing-stay" data-tenancy="${tid}">Open stay</button>`);
+  }
+  return chips.length?`<div class="lifecycle-badges" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">${chips.join('')}</div>`:'';
+}
+function paymentActionTypeLabel(a){
+  const t=String(a?.action_type||'rent_due').toLowerCase();
+  if(t==='deposit'){
+    const st=String(a?.status||'').toLowerCase();
+    if(st==='resolved'||/deposit paid/i.test(String(a?.resolve_reason||'')))return 'Deposit paid';
+    return 'Deposit';
+  }
+  return t.replace(/_/g,' ');
+}
+function bondIsFinanciallyFinalised(b){
+  if(!b)return false;
+  const rem=bondRemaining(b);
+  const st=String(bondDepositStatus(b)||'').toLowerCase();
+  if(b.refunded)return true;
+  if(rem!=null&&rem<=0&&(/refund|forfeit|settled|retained/.test(st)))return true;
+  if(rem!=null&&rem<=0&&(bondForfeited(b)>0||bondRefundedTotal(b)>0))return true;
+  const amt=Number(b.amount||0);
+  if(amt>0&&bondForfeited(b)+0.009>=amt&&(rem==null||rem<=0))return true;
+  if(amt>0&&bondRefundedTotal(b)+0.009>=amt&&(rem==null||rem<=0))return true;
+  return false;
+}
+function bondBucket(b){
+  if(!b)return 'current';
+  const t=(state.tenancies||[]).find(x=>Number(x.id)===Number(b.tenancy_id));
+  const stayPast=!t||isCancelledOrNoShow(t)||tenancyKind(t)==='historical'
+    ||['completed','ended','inactive','historical'].includes(String(t?.status||'').toLowerCase());
+  if(stayPast&&bondIsFinanciallyFinalised(b))return 'past';
+  return 'current';
+}
+/**
+ * Pure plan for Inspection → Deposit Paid → Payment Action → Confirmed Stay.
+ * Does not write to the DB — confirmDepositAndStayFromViewing executes this plan.
+ */
+function buildConfirmDepositStayPlan(v,opts={}){
+  if(!v)throw new Error('Inspection not found');
+  const viewingId=Number(v.id);
+  const amountRaw=opts.amount!=null?opts.amount:v.deposit_amount;
+  const amount=amountRaw===''||amountRaw==null?null:Number(amountRaw);
+  const currency=(opts.currency||v.deposit_currency||'AUD')==='CNY'?'CNY':'AUD';
+  const method=normalizePaymentMethod(opts.method||'Bank Transfer / EFT');
+  const checkIn=opts.check_in||v.intended_check_in||null;
+  const checkOut=opts.check_out||v.intended_check_out||null;
+  const roomIds=viewingRoomIds(v);
+  const roomId=Number(opts.room_id||roomIds[0]||v.room_id||0);
+  const propertyId=Number(v.property_id||roomBy(roomId)?.property_id||state.propertyId);
+  const existingTid=viewingLinkedTenancyId(v);
+  const existingPay=findDepositPaymentForViewing(viewingId)||(viewingLinkedPaymentId(v)?(state.payments||[]).find(p=>Number(p.id)===Number(viewingLinkedPaymentId(v))):null);
+  const existingAction=viewingLinkedActionId(v)?(state.paymentActions||[]).find(a=>Number(a.id)===Number(viewingLinkedActionId(v))):null;
+  const existingBond=viewingLinkedBondId(v)?(state.bonds||[]).find(b=>Number(b.id)===Number(viewingLinkedBondId(v))):null;
+  const existingTenancy=existingTid?(state.tenancies||[]).find(t=>Number(t.id)===Number(existingTid)):null;
+  const d=today();
+  const inspDone=v.inspection_date&&v.inspection_date<=d?v.inspection_date:d;
+  if(existingTenancy&&!isCancelledOrNoShow(existingTenancy)){
+    let notes=v.notes||'';
+    notes=upsertNoteMarker(notes,'TENANCY_ID',String(existingTenancy.id));
+    if(existingPay)notes=upsertNoteMarker(notes,'DEPOSIT_PAYMENT_ID',String(existingPay.id));
+    if(existingAction)notes=upsertNoteMarker(notes,'DEPOSIT_ACTION_ID',String(existingAction.id));
+    if(existingBond)notes=upsertNoteMarker(notes,'BOND_ID',String(existingBond.id));
+    notes=upsertNoteMarker(notes,'LIFECYCLE','deposit_paid');
+    notes=upsertNoteMarker(notes,'INSPECTION_COMPLETED',inspDone);
+    return {
+      idempotent:true,
+      amount:amount!=null&&!Number.isNaN(amount)?amount:Number(v.deposit_amount||0),
+      currency,method,checkIn,checkOut,roomId,propertyId,viewingId,
+      tenant:findTenantByExactName(v.visitor_name)||tenantBy(existingTenancy.tenant_id),
+      reuseTenant:true,
+      tenancy:existingTenancy,
+      payment:existingPay,
+      action:existingAction,
+      bond:existingBond,
+      viewingPatch:{
+        deposit_paid:true,
+        deposit_amount:amount!=null&&!Number.isNaN(amount)?amount:(v.deposit_amount??null),
+        deposit_currency:currency,
+        status:'completed',
+        notes,
+        updated_at:new Date().toISOString()
+      }
+    };
+  }
+  if(amount==null||Number.isNaN(amount)||amount<=0)throw new Error('Deposit amount is required to confirm booking.');
+  if(!checkIn)throw new Error('Check-in date is required to confirm booking.');
+  if(!roomId)throw new Error('Room is required to confirm booking.');
+  const existingTenant=findTenantByExactName(v.visitor_name);
+  const reuseTenant=!!existingTenant;
+  const tenantRow=existingTenant||{name:String(v.visitor_name||'').trim(),contact_method:v.contact_method||null,notes:'Created from inspection deposit'};
+  const tenancyStatus=checkIn>d?'upcoming':'active';
+  let tenancyNotes='';
+  tenancyNotes=upsertNoteMarker(tenancyNotes,'VIEWING_ID',String(viewingId));
+  tenancyNotes=upsertNoteMarker(tenancyNotes,'LIFECYCLE','stay_confirmed');
+  tenancyNotes=upsertNoteMarker(tenancyNotes,'SOURCE','inspection_deposit');
+  const tenancyRow={
+    room_id:roomId,
+    tenant_id:existingTenant?.id||null,
+    check_in:checkIn,
+    check_out:checkOut||null,
+    check_in_time:null,
+    check_out_time:null,
+    rent_amount:0,
+    rent_period:v.intended_tenancy_type==='long_term'?'week':'night',
+    payment_cycle_weeks:null,
+    tenancy_type:v.intended_tenancy_type||'short_term',
+    status:tenancyStatus,
+    notes:tenancyNotes,
+    people_count:v.people_count||1,
+    bills_included:false
+  };
+  const skipPayment=!!existingPay;
+  let paymentNotes='';
+  paymentNotes=upsertNoteMarker(paymentNotes,'PAYMENT_CURRENCY',currency);
+  paymentNotes=upsertNoteMarker(paymentNotes,'PAYMENT_TYPE','deposit');
+  paymentNotes=upsertNoteMarker(paymentNotes,'VIEWING_ID',String(viewingId));
+  paymentNotes=upsertNoteMarker(paymentNotes,'IDEMPOTENCY_KEY',viewingDepositIdempotencyKey(viewingId));
+  const paymentRow=skipPayment?null:{
+    tenancy_id:null,
+    amount,
+    received_date:d,
+    period_start:d,
+    period_end:d,
+    status:'paid',
+    payment_method:method,
+    notes:paymentNotes
+  };
+  const skipAction=!!existingAction;
+  let actionNotes=`Deposit paid from inspection #${viewingId}`;
+  actionNotes=upsertNoteMarker(actionNotes,'VIEWING_ID',String(viewingId));
+  actionNotes=upsertNoteMarker(actionNotes,'ORIGINAL_AMOUNT',String(amount));
+  const actionRow=skipAction?null:{
+    property_id:propertyId,
+    tenancy_id:null,
+    tenant_id:existingTenant?.id||null,
+    room_id:roomId,
+    related_payment_id:null,
+    related_bond_id:null,
+    action_type:'deposit',
+    amount,
+    due_date:d,
+    status:'resolved',
+    priority:'normal',
+    notes:actionNotes,
+    resolve_reason:'Deposit paid — booking confirmed',
+    resolved_at:new Date().toISOString()
+  };
+  const skipBond=!!existingBond||(existingTid&&bondForTenancy(existingTid));
+  let bondNotes='Deposit from inspection';
+  bondNotes=upsertNoteMarker(bondNotes,'VIEWING_ID',String(viewingId));
+  const bondRow=skipBond?null:{
+    tenancy_id:null,
+    amount,
+    original_currency:currency,
+    currency,
+    received:true,
+    refunded:false,
+    bond_type:'booking_deposit',
+    received_date:d,
+    notes:bondNotes,
+    remaining_amount:amount,
+    deposit_status:'Held'
+  };
+  let viewingNotes=v.notes||'';
+  viewingNotes=upsertNoteMarker(viewingNotes,'LIFECYCLE','deposit_paid');
+  viewingNotes=upsertNoteMarker(viewingNotes,'INSPECTION_COMPLETED',inspDone);
+  return {
+    idempotent:false,
+    amount,currency,method,checkIn,checkOut,roomId,propertyId,viewingId,
+    tenant:tenantRow,
+    reuseTenant,
+    tenancy:tenancyRow,
+    payment:paymentRow,
+    action:actionRow,
+    bond:bondRow,
+    existingPay,existingAction,existingBond,
+    viewingPatch:{
+      deposit_paid:true,
+      deposit_amount:amount,
+      deposit_currency:currency,
+      status:'completed',
+      notes:viewingNotes,
+      updated_at:new Date().toISOString()
+    }
+  };
+}
+async function confirmDepositAndStayFromViewing(viewingId,opts={}){
+  if(!canEdit())return null;
+  const v=(state.viewings||[]).find(x=>Number(x.id)===Number(viewingId));
+  if(!v){alert('Inspection not found');return null}
+  let amount=opts.amount!=null?opts.amount:v.deposit_amount;
+  let currency=opts.currency||v.deposit_currency||'AUD';
+  let method=opts.method||'Bank Transfer / EFT';
+  let checkIn=opts.check_in||v.intended_check_in||null;
+  let checkOut=opts.check_out||v.intended_check_out||null;
+  if((amount===''||amount==null)&&!opts.skipPrompts){
+    const raw=prompt('Deposit amount paid to secure the room?',String(v.deposit_amount||''));
+    if(raw===null)return null;
+    amount=raw===''?null:Number(raw);
+  }
+  if(!opts.currency&&!opts.skipPrompts&&(opts.promptCurrency!==false)){
+    if(opts.amount==null&&v.deposit_currency)currency=v.deposit_currency;
+    else if(opts.promptCurrency!==false&&!opts.skipConfirm){
+      /* keep currency from viewing or default; optional confirm already handled by mark flow */
+    }
+  }
+  if(!checkIn&&!opts.skipPrompts){
+    const raw=prompt('Confirmed check-in date (YYYY-MM-DD)?',String(v.intended_check_in||today()));
+    if(raw===null)return null;
+    checkIn=raw||null;
+  }
+  try{
+    const plan=buildConfirmDepositStayPlan(v,{...opts,amount,currency,method,check_in:checkIn,check_out:checkOut});
+    if(plan.idempotent){
+      await patch('room_viewings',`id=eq.${viewingId}`,plan.viewingPatch);
+      toast('Deposit flags updated — stay already confirmed');
+      await loadAll();
+      return plan;
+    }
+    let tenant=plan.reuseTenant?plan.tenant:null;
+    if(!tenant){
+      const created=await insert('tenants',{name:plan.tenant.name,contact_method:plan.tenant.contact_method||null,notes:plan.tenant.notes||null});
+      tenant=created?.[0];
+      if(!tenant?.id)throw new Error('Tenant was not returned from the database.');
+    }
+    const tenancyPayload={...plan.tenancy,tenant_id:tenant.id};
+    const tenCreated=await insert('tenancies',tenancyPayload);
+    const tenancy=tenCreated?.[0];
+    if(!tenancy?.id)throw new Error('Stay was not returned from the database.');
+    let payment=plan.existingPay||null;
+    if(plan.payment){
+      let pNotes=upsertNoteMarker(plan.payment.notes,'TENANCY_ID',String(tenancy.id));
+      const payCreated=await insert('rent_payments',{...plan.payment,tenancy_id:tenancy.id,notes:pNotes});
+      payment=payCreated?.[0]||payment;
+    }
+    let bond=plan.existingBond||bondForTenancy(tenancy.id)||null;
+    if(plan.bond){
+      const bondCreated=await insert('bonds',{...plan.bond,tenancy_id:tenancy.id});
+      bond=bondCreated?.[0]||bond;
+    }
+    let action=plan.existingAction||null;
+    if(plan.action){
+      let aNotes=plan.action.notes;
+      if(payment?.id)aNotes=upsertNoteMarker(aNotes,'PAYMENT_ID',String(payment.id));
+      aNotes=upsertNoteMarker(aNotes,'TENANCY_ID',String(tenancy.id));
+      const actCreated=await insert('payment_actions',{
+        ...plan.action,
+        tenancy_id:tenancy.id,
+        tenant_id:tenant.id,
+        related_payment_id:payment?.id||null,
+        related_bond_id:bond?.id||null,
+        notes:aNotes,
+        resolved_by:getSession()?.user?.id||null,
+        last_modified_by:getSession()?.user?.id||null,
+        last_modified_at:new Date().toISOString(),
+        created_by:getSession()?.user?.id||null
+      });
+      action=actCreated?.[0]||action;
+    }
+    let notes=plan.viewingPatch.notes||v.notes||'';
+    notes=upsertNoteMarker(notes,'TENANCY_ID',String(tenancy.id));
+    if(payment?.id)notes=upsertNoteMarker(notes,'DEPOSIT_PAYMENT_ID',String(payment.id));
+    if(action?.id)notes=upsertNoteMarker(notes,'DEPOSIT_ACTION_ID',String(action.id));
+    if(bond?.id)notes=upsertNoteMarker(notes,'BOND_ID',String(bond.id));
+    notes=upsertNoteMarker(notes,'LIFECYCLE','deposit_paid');
+    await patch('room_viewings',`id=eq.${viewingId}`,{...plan.viewingPatch,notes});
+    toast(`Deposit ${money(plan.amount,plan.currency)} recorded · booking confirmed (${tenancy.status})`);
+    await loadAll();
+    return {tenant,tenancy,payment,action,bond,plan};
+  }catch(e){
+    alert(e.message||e);
+    return null;
+  }
+}
 function bookingGroupId(t){
   return parseNoteMarker(t?.notes,'BOOKING_GROUP')||null;
 }
@@ -678,7 +1037,7 @@ function roomsAvailabilityNote(roomIds,start,end){
 }
 function displayCleanNotes(notes){
   let n=String(notes||'');
-  for(const key of ['ROOM_IDS','BOOKING_GROUP','SEGMENT_INDEX','SEGMENT_COUNT','CALCULATED_RENT','RENT_OVERRIDE','RENT_OVERRIDE_BY','RENT_OVERRIDE_AT','RENT_OVERRIDE_NOTE','REMINDER_SENT','CANCEL_DATE','CANCEL_REASON','CANCELLED_BY','DEPOSIT_TREATMENT','RENT_TREATMENT','ORIGINAL_AMOUNT','PAYMENT_ID','AMOUNT_LOCKED','MANUAL_AMOUNT','PAYMENT_CURRENCY','ACTION_ID','IDEMPOTENCY_KEY','EXTRA_ROOM_FEE']){
+  for(const key of ['ROOM_IDS','BOOKING_GROUP','SEGMENT_INDEX','SEGMENT_COUNT','CALCULATED_RENT','RENT_OVERRIDE','RENT_OVERRIDE_BY','RENT_OVERRIDE_AT','RENT_OVERRIDE_NOTE','REMINDER_SENT','CANCEL_DATE','CANCEL_REASON','CANCELLED_BY','DEPOSIT_TREATMENT','RENT_TREATMENT','ORIGINAL_AMOUNT','PAYMENT_ID','AMOUNT_LOCKED','MANUAL_AMOUNT','PAYMENT_CURRENCY','ACTION_ID','IDEMPOTENCY_KEY','EXTRA_ROOM_FEE','TENANCY_ID','DEPOSIT_PAYMENT_ID','DEPOSIT_ACTION_ID','BOND_ID','LIFECYCLE','INSPECTION_COMPLETED','VIEWING_ID','SOURCE','PAYMENT_TYPE']){
     n=stripNoteMarker(n,key);
   }
   return n.trim();
@@ -976,12 +1335,12 @@ function expectedStayTotal(t){
 function groupPaymentAmount(t){
   if(bookingGroupId(t)){
     const ids=new Set(bookingSegments(t).map(x=>Number(x.id)));
-    return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
+    return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&!isDepositPayment(p))
       .reduce((s,p)=>s+Number(p.amount||0),0);
   }
   // Count payments across the full room+check-in group (incl. historical) so coverage is not lost.
   const ids=new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
-  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p))
+  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&!isDepositPayment(p))
     .reduce((s,p)=>s+Number(p.amount||0),0);
 }
 function stayBalanceDue(t){return Math.max(0,Number((finalAmountDue(t)-groupPaymentAmount(t)).toFixed(2)))}
@@ -1028,14 +1387,14 @@ function isCountedPayment(p){
   return s!=='unpaid'&&s!=='void'&&s!=='cancelled'&&s!=='canceled'&&s!=='refunded';
 }
 function tenancyPayments(t){
-  return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&isCountedPayment(p)&&p.period_end)
+  return state.payments.filter(p=>Number(p.tenancy_id)===Number(t.id)&&isCountedPayment(p)&&!isDepositPayment(p)&&p.period_end)
     .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
 function groupTenancyPayments(t){
   const ids=bookingGroupId(t)
     ? new Set(bookingSegments(t).map(x=>Number(x.id)))
     : new Set(paymentGroupMembers(t).map(x=>Number(x.id)));
-  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&p.period_end)
+  return state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&isCountedPayment(p)&&!isDepositPayment(p)&&p.period_end)
     .sort((a,b)=>String(a.period_start||a.period_end).localeCompare(String(b.period_start||b.period_end)));
 }
 function paidThrough(t){
@@ -1793,6 +2152,7 @@ function tip(text){return `<span class="kpi-tip" title="${esc(text)}">?</span>`}
 function isRentalCashPayment(p){
   const st=String(p?.status||'').toLowerCase();
   if(['unpaid','void','cancelled','canceled','refunded'].includes(st))return false;
+  if(isDepositPayment(p))return false; // booking deposits are not rental income
   return !!(p?.received_date||p?.received_date);
 }
 function weeklyEquivalentRent(t){
@@ -1978,7 +2338,7 @@ function overviewPage(){
     return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
       <div class="occupant">${occupantLabel}</div>
       <div class="subline">${rentLine}</div>
-      ${next?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}</div>`:''}
+      ${next?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}<div class="muted small">Confirmed · upcoming</div></div>`:''}
       <div class="nextline"><b>Asking:</b> ${money(rp.current_asking_price)} &nbsp; <b>Standard:</b> ${money(rp.standard_price)}</div>
       ${canEdit()?`<div class="room-actions"><button class="btn ghost edit-room" data-room="${r.id}">Edit room</button></div>`:''}
     </article>`;
@@ -2083,17 +2443,20 @@ function withPaymentCurrency(note,currency){
 }
 function displayPaymentNotes(p){
   // User-facing notes only — never expose internal reconciliation / idempotency metadata.
-  const cleaned=String(p?.notes||'')
+  const raw=String(p?.notes||'');
+  const isDep=isDepositPayment(p);
+  const cleaned=raw
     .split('\n')
     .map(line=>line.trim())
     .filter(line=>{
       if(!line)return false;
-      if(/^(PAYMENT_CURRENCY|ACTION_ID|IDEMPOTENCY_KEY|ORIGINAL_AMOUNT|AMOUNT_LOCKED|MANUAL_AMOUNT|PAYMENT_ID|EXCESS_AMOUNT|RELATED_ACTION):/i.test(line))return false;
+      if(/^(PAYMENT_CURRENCY|ACTION_ID|IDEMPOTENCY_KEY|ORIGINAL_AMOUNT|AMOUNT_LOCKED|MANUAL_AMOUNT|PAYMENT_ID|EXCESS_AMOUNT|RELATED_ACTION|PAYMENT_TYPE|VIEWING_ID|TENANCY_ID):/i.test(line))return false;
       if(/^IDEMPOTENCY[_ ]?KEY\b/i.test(line))return false;
       return true;
     })
     .join('\n')
     .trim();
+  if(isDep)return cleaned?`Deposit · ${cleaned}`:'Deposit';
   return cleaned;
 }
 function displayPaymentNotesOrDash(p){
@@ -2232,9 +2595,24 @@ function viewingsPage(){
   ${rows.map(({v,kind})=>{
     const nights=v.intended_nights||((v.intended_check_in&&v.intended_check_out)?Math.max(0,Math.round((new Date(v.intended_check_out+'T00:00:00')-new Date(v.intended_check_in+'T00:00:00'))/86400000)):null);
     const stayLbl=v.intended_check_in?`${fmtDate(v.intended_check_in)}${v.intended_check_out?` → ${fmtDate(v.intended_check_out)}`:''}${nights!==null?`<div class="muted small">${nights} night${nights===1?'':'s'} · ${esc((v.intended_tenancy_type||'').replace('_',' ')||'stay')}</div>`:`<div class="muted small">${esc((v.intended_tenancy_type||'').replace('_',' ')||'')}</div>`}`:'—';
-    const dep=v.deposit_paid?`<b style="color:var(--green)">Paid</b>${v.deposit_amount?`<div class="muted small">${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</div>`:''}`:'<span class="muted">Not yet</span>';
+    const dep=viewingLifecycleBadgesHtml(v)||(v.deposit_paid?`<b style="color:var(--green)">Paid</b>${v.deposit_amount?`<div class="muted small">${money(v.deposit_amount,v.deposit_currency==='CNY'?'CNY':'AUD')}</div>`:''}`:'<span class="muted">Not yet</span>');
     const when=`${fmtDate(v.inspection_date)}${v.inspection_time?`<div class="muted small">${esc(String(v.inspection_time).slice(0,5))}</div>`:''}`;
-    return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(viewingRoomsLabel(v))}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(displayCleanNotes(v.notes)||'')}</td><td>${badge(kind)}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>${!v.deposit_paid?`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`:''}<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button></div>`:'—'}</td></tr>`;
+    const linkedTid=viewingLinkedTenancyId(v);
+    const life=viewingLifecycleStage(v);
+    let actionBtns='—';
+    if(canEdit()){
+      const btns=[`<button class="btn ghost edit-viewing" data-viewing="${v.id}">Edit</button>`];
+      if(linkedTid&&life==='stay_confirmed'){
+        btns.push(`<button class="btn ghost open-viewing-stay" data-tenancy="${linkedTid}">Open stay</button>`);
+      }else if(v.deposit_paid&&!linkedTid){
+        btns.push(`<button class="btn ghost confirm-viewing-booking" data-viewing="${v.id}">Confirm booking from deposit</button>`);
+      }else if(!v.deposit_paid){
+        btns.push(`<button class="btn ghost mark-viewing-deposit" data-viewing="${v.id}">Mark deposit</button>`);
+      }
+      btns.push(`<button class="btn ghost delete-viewing" data-viewing="${v.id}">Delete</button>`);
+      actionBtns=`<div class="tenant-actions">${btns.join('')}</div>`;
+    }
+    return `<tr><td>${when}</td><td><b>${esc(v.visitor_name)}</b><div class="muted small">${esc(v.contact_method||'')}</div></td><td>${esc(viewingRoomsLabel(v))}</td><td>${esc(viewingPeopleLabel(v))}</td><td>${v.needs_extra_bed?'Yes':'No'}</td><td>${stayLbl}</td><td>${dep}</td><td>${esc(displayCleanNotes(v.notes)||'')}</td><td>${badge(kind)}</td><td>${actionBtns}</td></tr>`;
   }).join('')||`<tr><td colspan="10" class="muted">No ${esc(filter)} inspections for ${esc(prop?.name||'this property')}.</td></tr>`}
   </tbody></table></div></section>`;
 }
@@ -2317,7 +2695,7 @@ function paymentsPage(){
     const roomLbl=t&&bookingGroupId(t)
       ? bookingSegments(t).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id))).filter((v,i,a)=>a.indexOf(v)===i).join(', ')
       : roomLabel(a.room_id||t?.room_id);
-    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLbl)}</div></td><td>${related}</td><td>${esc((a.action_type||'rent_due').replace('_',' '))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
+    return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLbl)}</div></td><td>${related}</td><td>${esc(paymentActionTypeLabel(a))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:|^VIEWING_ID:|^TENANCY_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
   }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions in this filter.</div>'}</section>`;
   return `${actionPanel}
   <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Multi-room booking groups show once (sum of segments). Cancelled bookings excluded.</div></div></div>
@@ -2387,9 +2765,17 @@ function incomePage(){
   </div>`;
 }
 function bondsPage(){
-  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.bonds.filter(b=>ids.has(b.tenancy_id)).sort((a,b)=>b.id-a.id);
-  return `<section class="panel"><div class="panel-head"><h2>Bond & refund register</h2>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}</td><td>${esc(b.remaining_description||b.notes||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / forfeit</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No bond records.</div>'}</section>
-  <section class="panel"><div class="panel-head"><h2>Bond action history</h2></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>rows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
+  const filter=state.bondFilter||'current';
+  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id));
+  const all=state.bonds.filter(b=>ids.has(b.tenancy_id)).sort((a,b)=>b.id-a.id);
+  const currentRows=all.filter(b=>bondBucket(b)==='current');
+  const pastRows=all.filter(b=>bondBucket(b)==='past');
+  const rows=filter==='past'?pastRows:currentRows;
+  const historyRows=all; // history for all bonds on this property (current + past)
+  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Current = held / unresolved (including ended stays awaiting refund). Past = stay ended/cancelled <b>and</b> bond financially finalised.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
+  <div class="tenant-tools"><div class="view-switch"><button class="${filter==='current'?'active':''}" data-bfilter="current">Current (${currentRows.length})</button><button class="${filter==='past'?'active':''}" data-bfilter="past">Past (${pastRows.length})</button></div></div>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${esc(bondBucket(b))}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / forfeit</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${esc(filter)} bond records.</div>`}</section>
+  <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (current and past).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
   const roomIds=new Set(currentPropertyRooms().map(r=>r.id)), rows=state.priceHistory.filter(x=>roomIds.has(x.room_id));
@@ -2505,6 +2891,19 @@ function render(){
   $$('.edit-viewing').forEach(b=>b.onclick=()=>openEditViewing(Number(b.dataset.viewing)));
   $$('.delete-viewing').forEach(b=>b.onclick=()=>deleteViewing(Number(b.dataset.viewing)));
   $$('.mark-viewing-deposit').forEach(b=>b.onclick=()=>markViewingDeposit(Number(b.dataset.viewing)));
+  $$('.confirm-viewing-booking').forEach(b=>b.onclick=async()=>{
+    if(!canEdit())return;
+    const id=Number(b.dataset.viewing);
+    const v=state.viewings.find(x=>Number(x.id)===id);if(!v)return;
+    if(!confirm('Confirm booking from this paid deposit?\n\nCreates a confirmed stay + Deposit payment action if not already linked. Existing deposit payments are not duplicated.'))return;
+    await confirmDepositAndStayFromViewing(id,{
+      amount:v.deposit_amount,
+      currency:v.deposit_currency||'AUD',
+      skipPrompts:true
+    });
+  });
+  $$('.open-viewing-stay').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
+  $$('[data-bfilter]').forEach(b=>b.onclick=()=>{state.bondFilter=b.dataset.bfilter;render()});
   $$('.edit-payment-action').forEach(b=>b.onclick=()=>openEditPaymentAction(b.dataset.action));
   $$('.open-source-booking').forEach(b=>b.onclick=()=>openTenancy(Number(b.dataset.tenancy)));
   $$('.open-tenant-profile').forEach(b=>b.onclick=()=>{if(b.dataset.tenant)openTenant(Number(b.dataset.tenant))});
@@ -2685,19 +3084,18 @@ async function deleteViewing(id){
 async function markViewingDeposit(id){
   if(!canEdit())return;
   const v=state.viewings.find(x=>Number(x.id)===Number(id));if(!v)return;
-  const amount=prompt('Deposit amount paid to secure the room?',String(v.deposit_amount||''));
-  if(amount===null)return;
+  if(!confirm('Mark deposit paid?\n\nThis will create a Deposit payment action (resolved), a bond/deposit record, and a confirmed stay so the room is reserved.\n\nHistorical deposit payments are kept if the booking is later cancelled.'))return;
+  const amount=v.deposit_amount!=null&&v.deposit_amount!==''?v.deposit_amount:null;
+  let opts={};
+  if(amount==null){
+    const raw=prompt('Deposit amount paid to secure the room?','');
+    if(raw===null)return;
+    opts.amount=raw===''?null:Number(raw);
+  }else opts.amount=Number(amount);
   const currency=confirm('OK = AUD, Cancel = CNY (RMB)')?'AUD':'CNY';
-  try{
-    await patch('room_viewings',`id=eq.${id}`,{
-      deposit_paid:true,
-      deposit_amount:amount===''?null:Number(amount),
-      deposit_currency:currency,
-      updated_at:new Date().toISOString()
-    });
-    toast('Deposit marked paid');
-    await loadAll();
-  }catch(e){alert(e.message)}
+  opts.currency=currency;
+  opts.skipPrompts=true;
+  await confirmDepositAndStayFromViewing(id,opts);
 }
 function staySegmentCardHtml(idx,rooms,data={}){
   const roomOpts=rooms.map(r=>`<option value="${r.id}" ${Number(data.room_id)===Number(r.id)?'selected':''}>${esc(roomOptionLabel(r))}</option>`).join('')||'<option value="">No rooms</option>';
@@ -3077,8 +3475,8 @@ function openCancelBooking(tenancyId){
   if(!canEdit())return;
   const t=state.tenancies.find(x=>Number(x.id)===Number(tenancyId));if(!t)return;
   if(tenancyHasRecordedPayments(tenancyId)){
-    alert('This stay has recorded payments.\nDelete/refund/reverse the related payment before cancelling this stay.');
-    return;
+    // Keep rent_payments + deposit payment_actions — cancel must not delete payment history.
+    if(!confirm('This stay has recorded payments (including any deposit).\n\nCancel will keep payment history, free the room, and leave deposit actions intact.\nContinue?'))return;
   }
   const f=$('#cancel-booking-form');f.reset();
   f.elements.tenancy_id.value=String(t.id);
@@ -3484,15 +3882,29 @@ $('#viewing-form').onsubmit=async e=>{
     }
   }
   try{
+    let savedId=editId||null;
     if(editId){
       await patch('room_viewings',`id=eq.${editId}`,row);
       toast('Inspection updated');
     }else{
       row.created_by=getSession()?.user?.id||null;
-      await insert('room_viewings',row);
+      const created=await insert('room_viewings',row);
+      savedId=created?.[0]?.id||null;
       toast('Inspection booked');
     }
     f.reset();f.elements.id.value='';$('#viewing-dialog').close();await loadAll();
+    if(depositPaid&&savedId){
+      const saved=(state.viewings||[]).find(x=>Number(x.id)===Number(savedId));
+      if(saved&&!viewingLinkedTenancyId(saved)){
+        await confirmDepositAndStayFromViewing(savedId,{
+          amount:saved.deposit_amount!=null?saved.deposit_amount:row.deposit_amount,
+          currency:saved.deposit_currency||row.deposit_currency||'AUD',
+          check_in:saved.intended_check_in||row.intended_check_in,
+          check_out:saved.intended_check_out||row.intended_check_out,
+          skipPrompts:true
+        });
+      }
+    }
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}finally{if(saveBtn){saveBtn.dataset.busy='';saveBtn.disabled=false}}
 };
 $('#room-form').onsubmit=async e=>{
@@ -3587,11 +3999,7 @@ $('#cancel-booking-form').onsubmit=async e=>{
   const f=e.currentTarget,fd=new FormData(f),err=$('#cancel-booking-error');err.classList.add('hidden');
   const id=Number(fd.get('tenancy_id'));
   const t=state.tenancies.find(x=>Number(x.id)===id);if(!t)return;
-  if(tenancyHasRecordedPayments(id)){
-    err.textContent='This stay has recorded payments. Delete/refund/reverse the related payment before cancelling this stay.';
-    err.classList.remove('hidden');
-    return;
-  }
+  // Do NOT delete rent_payments or deposit payment_actions on cancel — retain history.
   const status=fd.get('status')||'cancelled';
   const depositTreatment=fd.get('deposit_treatment');
   const rentTreatment=fd.get('rent_treatment')||'not_payable';

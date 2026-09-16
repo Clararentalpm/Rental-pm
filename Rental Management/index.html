@@ -177,8 +177,9 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="stay-dialog"><form id="stay-form" class="dialog-body">
-  <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Add a new tenant and allocate one or more room / date periods (one tenant row).</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
+  <div class="dialog-head"><div><h2>New tenant / stay</h2><div class="muted small">Reuse an existing tenant when possible. Duplicate same-room stays are blocked — open or edit the existing booking instead.</div></div><button type="button" class="close" data-close="stay-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
+    <label>Existing tenant (optional)<select name="tenant_id"><option value="">— New tenant / match by exact name —</option></select></label>
     <label>Tenant name<input name="name" required></label>
     <label>Contact method<input name="contact_method" placeholder="Phone / WeChat / Email"></label>
   </div>
@@ -193,6 +194,19 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   <div id="stay-error" class="error hidden"></div>
   <div class="dialog-actions"><button type="button" class="btn ghost" data-close="stay-dialog">Cancel</button><button class="btn primary">Save stay</button></div>
 </form></dialog>
+
+<dialog id="stay-conflict-dialog">
+  <div class="dialog-body">
+    <div class="dialog-head"><div><h2>Existing stay found</h2><div class="muted small">An existing stay may already exist for this tenant. Creating another stay was blocked.</div></div><button type="button" class="close" data-close="stay-conflict-dialog">×</button></div>
+    <div id="stay-conflict-message" class="note" style="margin-top:12px"></div>
+    <div id="stay-conflict-details" style="margin-top:12px"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" data-close="stay-conflict-dialog">Cancel</button>
+      <button type="button" class="btn ghost" id="stay-conflict-open">Open existing stay</button>
+      <button type="button" class="btn primary" id="stay-conflict-edit">Edit / extend existing stay</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
   <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle. WeChat defaults to RMB (CNY); Cash / EFT default to AUD.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
@@ -641,9 +655,14 @@ function findDepositPaymentForViewing(viewingId){
   })||null;
 }
 function findTenantByExactName(name){
+  const matches=findTenantsByExactName(name);
+  // Ambiguous same-name tenants must not auto-merge — callers use findTenantsByExactName.
+  return matches.length===1?matches[0]:null;
+}
+function findTenantsByExactName(name){
   const n=String(name||'').trim().toLowerCase();
-  if(!n)return null;
-  return (state.tenants||[]).find(t=>String(t.name||'').trim().toLowerCase()===n)||null;
+  if(!n)return [];
+  return (state.tenants||[]).filter(t=>String(t.name||'').trim().toLowerCase()===n);
 }
 /**
  * Inspection → deposit → confirmed stay lifecycle stage (markers + flags + linked tenancy).
@@ -773,10 +792,43 @@ function buildConfirmDepositStayPlan(v,opts={}){
       }
     };
   }
+  // Opposite-direction protection: manual + New Stay already created a matching operational stay.
+  const reusable=findReusableStayForInspection(v,{roomId,checkIn,checkOut});
+  if(reusable?.stay){
+    let notes=v.notes||'';
+    notes=upsertNoteMarker(notes,'TENANCY_ID',String(reusable.stay.id));
+    if(existingPay)notes=upsertNoteMarker(notes,'DEPOSIT_PAYMENT_ID',String(existingPay.id));
+    if(existingAction)notes=upsertNoteMarker(notes,'DEPOSIT_ACTION_ID',String(existingAction.id));
+    if(existingBond)notes=upsertNoteMarker(notes,'BOND_ID',String(existingBond.id));
+    notes=upsertNoteMarker(notes,'LIFECYCLE','deposit_paid');
+    notes=upsertNoteMarker(notes,'INSPECTION_COMPLETED',inspDone);
+    return {
+      idempotent:true,
+      linkedExistingStay:true,
+      amount:amount!=null&&!Number.isNaN(amount)?amount:Number(v.deposit_amount||0),
+      currency,method,checkIn,checkOut,roomId,propertyId,viewingId,
+      tenant:reusable.tenant,
+      reuseTenant:true,
+      tenancy:reusable.stay,
+      payment:existingPay,
+      action:existingAction,
+      bond:existingBond||bondForTenancy(reusable.stay.id),
+      viewingPatch:{
+        deposit_paid:true,
+        deposit_amount:amount!=null&&!Number.isNaN(amount)?amount:(v.deposit_amount??null),
+        deposit_currency:currency,
+        status:'completed',
+        notes,
+        updated_at:new Date().toISOString()
+      }
+    };
+  }
   if(amount==null||Number.isNaN(amount)||amount<=0)throw new Error('Deposit amount is required to confirm booking.');
   if(!checkIn)throw new Error('Check-in date is required to confirm booking.');
   if(!roomId)throw new Error('Room is required to confirm booking.');
-  const existingTenant=findTenantByExactName(v.visitor_name);
+  const nameMatches=findTenantsByExactName(v.visitor_name);
+  // Never merge two different Tenant IDs that share a name — only auto-reuse when unambiguous.
+  const existingTenant=nameMatches.length===1?nameMatches[0]:null;
   const reuseTenant=!!existingTenant;
   const tenantRow=existingTenant||{name:String(v.visitor_name||'').trim(),contact_method:v.contact_method||null,notes:'Created from inspection deposit'};
   const tenancyStatus=checkIn>d?'upcoming':'active';
@@ -904,7 +956,7 @@ async function confirmDepositAndStayFromViewing(viewingId,opts={}){
     const plan=buildConfirmDepositStayPlan(v,{...opts,amount,currency,method,check_in:checkIn,check_out:checkOut});
     if(plan.idempotent){
       await patch('room_viewings',`id=eq.${viewingId}`,plan.viewingPatch);
-      toast('Deposit flags updated — stay already confirmed');
+      toast(plan.linkedExistingStay?'Deposit linked to existing stay — no duplicate created':'Deposit flags updated — stay already confirmed');
       await loadAll();
       return plan;
     }
@@ -915,7 +967,9 @@ async function confirmDepositAndStayFromViewing(viewingId,opts={}){
       if(!tenant?.id)throw new Error('Tenant was not returned from the database.');
     }
     const tenancyPayload={...plan.tenancy,tenant_id:tenant.id};
-    const tenCreated=await insert('tenancies',tenancyPayload);
+    // Final shared guard — never create a parallel stay for the same tenant/room/dates.
+    assertCanCreateStay(tenancyPayload);
+    const tenCreated=await insertTenancySafe(tenancyPayload,{source:'inspection_deposit'});
     const tenancy=tenCreated?.[0];
     if(!tenancy?.id)throw new Error('Stay was not returned from the database.');
     let payment=plan.existingPay||null;
@@ -1601,6 +1655,160 @@ function upcomingArrivals(horizonDays=7){
     seen.add(key);
     return true;
   }).sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')||Number(a.id)-Number(b.id));
+}
+/** Half-open [start, end) overlap. Null/empty end = open-ended. */
+function rangesHalfOpenOverlap(aStart,aEnd,bStart,bEnd){
+  if(!aStart||!bStart)return false;
+  const ae=aEnd||'9999-12-31', be=bEnd||'9999-12-31';
+  return aStart<be&&bStart<ae;
+}
+function rangesEffectivelyIdentical(aStart,aEnd,bStart,bEnd){
+  if(!aStart||!bStart||aStart!==bStart)return false;
+  const ae=aEnd||null, be=bEnd||null;
+  return ae===be;
+}
+function staySourceLabel(t){
+  if(!t)return '—';
+  const src=parseNoteMarker(t.notes,'SOURCE');
+  if(src==='inspection_deposit')return 'Inspection → Deposit';
+  if(src==='manual_stay')return 'Manual + New Stay';
+  if(bookingGroupId(t))return 'Multi-room booking';
+  const vid=parseNoteMarker(t.notes,'VIEWING_ID');
+  if(vid)return `Inspection #${vid}`;
+  return 'Stay / booking';
+}
+function stayConflictDetailHtml(t){
+  const ten=tenantBy(t.tenant_id);
+  const vid=parseNoteMarker(t.notes,'VIEWING_ID');
+  return `<div class="table-wrap" style="margin-top:8px"><table><tbody>
+    <tr><th>Tenant</th><td><b>${esc(ten?.name||'Tenant')}</b><div class="muted small">Tenant ID ${esc(t.tenant_id)}</div></td></tr>
+    <tr><th>Room</th><td>${esc(roomLabel(t.room_id))}</td></tr>
+    <tr><th>Start</th><td>${fmtDate(t.check_in)}</td></tr>
+    <tr><th>End</th><td>${fmtDate(effectiveOccupancyEnd(t))}</td></tr>
+    <tr><th>Status</th><td>${badge(isCancelledOrNoShow(t)?normalizeBookingStatus(t):tenancyKind(t))} · Stay ID ${esc(t.id)}</td></tr>
+    <tr><th>Origin</th><td>${esc(staySourceLabel(t))}${vid?`<div class="muted small">Inspection ID ${esc(vid)}</div>`:''}</td></tr>
+  </tbody></table></div>`;
+}
+/**
+ * Shared create-path validation (Tenant ID + room + dates — never name alone).
+ * Levels: none | duplicate | overlap | extension | continuation
+ */
+function evaluateStayCreateConflict(proposed={},opts={}){
+  const tenantId=Number(proposed.tenantId||proposed.tenant_id||0);
+  const roomId=Number(proposed.roomId||proposed.room_id||0);
+  const checkIn=proposed.checkIn||proposed.check_in||null;
+  const checkOut=proposed.checkOut??proposed.check_out??null;
+  if(!tenantId||!roomId||!checkIn)return {level:'none',matches:[],reason:null,message:null};
+  const exclude=new Set((opts.excludeIds||[]).map(Number));
+  const candidates=(state.tenancies||[]).filter(t=>{
+    if(!t||exclude.has(Number(t.id)))return false;
+    if(Number(t.tenant_id)!==tenantId)return false;
+    if(isOperationallyClosed(t))return false;
+    return true;
+  });
+  const sameRoom=candidates.filter(t=>Number(t.room_id)===roomId);
+  const duplicates=sameRoom.filter(t=>rangesEffectivelyIdentical(t.check_in,effectiveOccupancyEnd(t),checkIn,checkOut));
+  if(duplicates.length){
+    return {level:'duplicate',matches:duplicates,reason:'identical',message:'An existing stay may already exist for this tenant.'};
+  }
+  const overlaps=sameRoom.filter(t=>rangesHalfOpenOverlap(t.check_in,effectiveOccupancyEnd(t),checkIn,checkOut));
+  if(overlaps.length){
+    const extensions=overlaps.filter(t=>{
+      const eEnd=effectiveOccupancyEnd(t);
+      if(t.check_in===checkIn&&checkOut&&eEnd&&checkOut>eEnd)return true;
+      if(checkIn>t.check_in&&eEnd&&checkIn<eEnd&&checkOut&&(!eEnd||checkOut>eEnd))return true;
+      return false;
+    });
+    if(extensions.length&&overlaps.length===extensions.length){
+      return {level:'extension',matches:extensions,reason:'extension',message:'This looks like an extension of an existing stay. Open / extend the existing stay instead of creating another.'};
+    }
+    return {level:'overlap',matches:overlaps,reason:'overlap',message:'An existing stay overlaps these dates for this tenant and room.'};
+  }
+  if(!opts.skipContinuation&&!(opts.pendingSegments&&opts.pendingSegments.length>1)){
+    const adj=candidates.filter(t=>{
+      if(Number(t.room_id)===roomId)return false;
+      const eEnd=effectiveOccupancyEnd(t);
+      return !!eEnd&&eEnd===checkIn;
+    });
+    if(adj.length){
+      return {level:'continuation',matches:adj,reason:'continuation',message:'An existing stay may continue into this room. Prefer adding a room allocation to the existing booking.'};
+    }
+  }
+  return {level:'none',matches:[],reason:null,message:null};
+}
+function findReusableStayForInspection(v,{roomId,checkIn,checkOut}={}){
+  const nameMatches=findTenantsByExactName(v?.visitor_name);
+  if(!nameMatches.length||!roomId||!checkIn)return null;
+  const tenantIds=new Set(nameMatches.map(t=>Number(t.id)));
+  const candidates=(state.tenancies||[]).filter(t=>{
+    if(isOperationallyClosed(t))return false;
+    if(!tenantIds.has(Number(t.tenant_id)))return false;
+    if(Number(t.room_id)!==Number(roomId))return false;
+    return rangesEffectivelyIdentical(t.check_in,effectiveOccupancyEnd(t),checkIn,checkOut)
+      || rangesHalfOpenOverlap(t.check_in,effectiveOccupancyEnd(t),checkIn,checkOut||null);
+  });
+  if(!candidates.length)return null;
+  const identical=candidates.filter(t=>rangesEffectivelyIdentical(t.check_in,effectiveOccupancyEnd(t),checkIn,checkOut));
+  const pick=(identical.length===1?identical[0]:null)||(candidates.length===1?candidates[0]:null);
+  if(!pick)return null;
+  return {stay:pick,tenant:tenantBy(pick.tenant_id)||nameMatches.find(t=>Number(t.id)===Number(pick.tenant_id))||null};
+}
+/**
+ * Mutation-layer guard used by both + New Stay and Inspection → Deposit.
+ * Throws Error with .stayConflict when create must be blocked.
+ */
+function assertCanCreateStay(row,opts={}){
+  if(!row||!row.tenant_id||!row.room_id||!row.check_in)return {level:'none'};
+  if(isOperationallyClosed(row))return {level:'none'};
+  const conflict=evaluateStayCreateConflict({
+    tenantId:row.tenant_id,roomId:row.room_id,checkIn:row.check_in,checkOut:row.check_out??null
+  },opts);
+  if(conflict.level==='none')return conflict;
+  const err=new Error(conflict.message||'Stay conflict — duplicate create blocked');
+  err.stayConflict=conflict;
+  throw err;
+}
+async function insertTenancySafe(row,opts={}){
+  assertCanCreateStay(row,opts);
+  let notes=row.notes||'';
+  if(!parseNoteMarker(notes,'SOURCE')&&opts.source)notes=upsertNoteMarker(notes,'SOURCE',opts.source);
+  return insert('tenancies',{...row,notes});
+}
+function resolveTenantForStayCreate({tenantId,name,contact_method}){
+  const id=tenantId?Number(tenantId):0;
+  if(id){
+    const t=tenantBy(id);
+    if(!t)throw new Error('Selected tenant was not found.');
+    return {tenant:t,reuse:true,create:false};
+  }
+  const matches=findTenantsByExactName(name);
+  if(matches.length>1){
+    const err=new Error(`Multiple tenants named “${String(name||'').trim()}”. Select the correct Existing tenant (by Tenant ID) — do not create a duplicate by name.`);
+    err.code='ambiguous_tenant';
+    err.matches=matches;
+    throw err;
+  }
+  if(matches.length===1)return {tenant:matches[0],reuse:true,create:false};
+  return {tenant:{name:String(name||'').trim(),contact_method:contact_method||null,notes:'Created in Rental PM V6'},reuse:false,create:true};
+}
+function showStayConflictDialog(conflict){
+  const match=conflict?.matches?.[0];
+  if(!match){alert(conflict?.message||'Existing stay conflict');return}
+  const msg=$('#stay-conflict-message'), details=$('#stay-conflict-details');
+  if(msg)msg.textContent=conflict.message||'An existing stay may already exist for this tenant.';
+  if(details)details.innerHTML=stayConflictDetailHtml(match);
+  const openBtn=$('#stay-conflict-open'), editBtn=$('#stay-conflict-edit');
+  if(openBtn)openBtn.onclick=()=>{
+    $('#stay-conflict-dialog')?.close();
+    $('#stay-dialog')?.close();
+    openTenancy(Number(match.id));
+  };
+  if(editBtn)editBtn.onclick=()=>{
+    $('#stay-conflict-dialog')?.close();
+    $('#stay-dialog')?.close();
+    openTenancy(Number(match.id));
+  };
+  $('#stay-conflict-dialog')?.showModal();
 }
 /** Best stay to show for a tenant profile row on the *current property* tab. */
 function tenantProfileRow(tenant,propertyId=state.propertyId){
@@ -3277,6 +3485,16 @@ function openStay(){
   addStaySegment({tenancy_type:'short_term',rent_period:'night',people_count:1});
   const addBtn=$('#stay-add-segment');
   if(addBtn)addBtn.onclick=()=>addStaySegment({tenancy_type:'short_term',rent_period:'night',people_count:1});
+  const sel=f?.elements?.tenant_id;
+  if(sel){
+    const opts=['<option value="">— New tenant / match by exact name —</option>']
+      .concat((state.tenants||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(t=>`<option value="${t.id}">${esc(t.name)} · ID ${t.id}</option>`));
+    sel.innerHTML=opts.join('');
+    sel.onchange=()=>{
+      const t=tenantBy(sel.value);
+      if(t&&f.elements.name){f.elements.name.value=t.name||'';if(f.elements.contact_method)f.elements.contact_method.value=t.contact_method||''}
+    };
+  }
   $('#stay-error')?.classList.add('hidden');
   updateStayRentPreview();
   $('#stay-dialog').showModal();
@@ -3732,12 +3950,41 @@ $('#stay-form').onsubmit=async e=>{
       if(s.check_in&&s.check_out&&s.check_out<=s.check_in){
         err.textContent=`Segment ${i+1}: check-out must be after check-in.`;err.classList.remove('hidden');return;
       }
+    }
+    let resolved;
+    try{
+      resolved=resolveTenantForStayCreate({tenantId:fd.get('tenant_id'),name:fd.get('name'),contact_method:fd.get('contact_method')||null});
+    }catch(ex){
+      err.textContent=ex.message;err.classList.remove('hidden');return;
+    }
+    let tenant=resolved.tenant;
+    if(resolved.create){
+      // Defer tenant insert until after conflict checks against resolved identity when possible.
+      // New tenants cannot conflict by Tenant ID — still check room overlap soft-warn below.
+    }else{
+      for(let i=0;i<segs.length;i++){
+        const s=segs[i];
+        const conflict=evaluateStayCreateConflict({
+          tenantId:tenant.id,roomId:s.room_id,checkIn:s.check_in,checkOut:s.check_out||null
+        },{pendingSegments:segs,skipContinuation:segs.length>1});
+        if(conflict.level!=='none'){
+          showStayConflictDialog(conflict);
+          err.textContent=conflict.message||'Existing stay conflict — duplicate create blocked.';
+          err.classList.remove('hidden');
+          return;
+        }
+      }
+    }
+    for(let i=0;i<segs.length;i++){
+      const s=segs[i];
       if(s.check_in&&roomOccupiedOverlap(s.room_id,s.check_in,s.check_out||null)){
         if(!confirm(`${roomAvailabilityNote(s.room_id,s.check_in,s.check_out||null)}\n\nSave segment ${i+1} anyway?`)){return}
       }
     }
-    const tr=await insert('tenants',{name:fd.get('name'),contact_method:fd.get('contact_method')||null,notes:'Created in Rental PM V6'});
-    const tenant=tr?.[0];if(!tenant?.id)throw new Error('Tenant ID was not returned.');
+    if(resolved.create){
+      const tr=await insert('tenants',{name:resolved.tenant.name,contact_method:resolved.tenant.contact_method||null,notes:resolved.tenant.notes||null});
+      tenant=tr?.[0];if(!tenant?.id)throw new Error('Tenant ID was not returned.');
+    }
     const multi=segs.length>1;
     const groupId=multi?newBookingGroupId():null;
     const baseNotes=String(fd.get('notes')||'').trim();
@@ -3746,12 +3993,13 @@ $('#stay-form').onsubmit=async e=>{
       const s=segs[i];
       const tLike={check_in:s.check_in,check_out:s.check_out,confirmed_until:null,rent_amount:s.rent_amount,rent_period:s.rent_period,payment_cycle_weeks:s.payment_cycle_weeks,tenancy_type:s.tenancy_type};
       let notes=buildStayNotesWithRent(baseNotes,tLike,s.rent_override,s.rent_override_note||'',null);
+      notes=upsertNoteMarker(notes,'SOURCE','manual_stay');
       if(multi){
         notes=upsertNoteMarker(notes,'BOOKING_GROUP',groupId);
         notes=upsertNoteMarker(notes,'SEGMENT_INDEX',String(i+1));
         notes=upsertNoteMarker(notes,'SEGMENT_COUNT',String(segs.length));
       }
-      const tenancyRows=await insert('tenancies',{
+      const row={
         room_id:Number(s.room_id),
         tenant_id:tenant.id,
         tenancy_type:s.tenancy_type,
@@ -3767,7 +4015,22 @@ $('#stay-form').onsubmit=async e=>{
         bills_included:!!s.bills_included,
         status:s.check_in&&s.check_in>today()?'upcoming':'active',
         notes
-      });
+      };
+      let tenancyRows;
+      try{
+        tenancyRows=await insertTenancySafe(row,{
+          source:'manual_stay',
+          pendingSegments:segs,
+          skipContinuation:multi,
+          excludeIds:primaryCreated?[primaryCreated.id]:[]
+        });
+      }catch(ex){
+        if(ex.stayConflict){
+          showStayConflictDialog(ex.stayConflict);
+          err.textContent=ex.message;err.classList.remove('hidden');return;
+        }
+        throw ex;
+      }
       if(i===0)primaryCreated=tenancyRows?.[0]||null;
     }
     f.reset();

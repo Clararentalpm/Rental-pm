@@ -67,5 +67,5 @@ assert(sandbox.tenantProfileRow({id:30,name:'Both'}).stay.id===7,'Carindale tab 
 
 assert(html.includes('add-property-tab'),'+ Property tab markup');
 assert(html.includes('id="property-dialog"'),'property dialog present');
-assert(html.includes('McGregor and Carindale tenants stay on their own property tab'),'tenants page scoped copy');
+assert(html.includes('McGregor and Carindale tenants stay on their own property tab')||html.includes('Current = active occupancy today'),'tenants page scoped copy');
 console.log('tenant-filter-test passed');

@@ -236,19 +236,22 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="bond-dialog"><form id="bond-form" class="dialog-body">
-  <div class="dialog-head"><div><h2 id="bond-dialog-title">Add bond / deposit</h2></div><button type="button" class="close" data-close="bond-dialog">×</button></div>
+  <div class="dialog-head"><div><h2 id="bond-dialog-title">Add bond / deposit</h2><div id="bond-dialog-sub" class="muted small">Updates the existing bond record — does not create a second Bond Paid entry.</div></div><button type="button" class="close" data-close="bond-dialog">×</button></div>
   <input type="hidden" name="id" value="">
+  <div id="bond-edit-warning" class="note hidden" style="margin-top:12px"></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Tenancy<select name="tenancy_id" required></select></label>
     <label>Type<select name="bond_type"><option value="booking_deposit">Booking Deposit</option><option value="rental_bond">Rental Bond / Security Bond</option><option value="deposit">Deposit</option><option value="rent_advance">Rent Advance</option><option value="other">Other Deposit</option><option value="bond">Bond</option></select></label>
-    <label>Amount<input name="amount" type="number" step="0.01" required></label>
+    <label>Bond amount<input name="amount" type="number" step="0.01" min="0" required></label>
     <label>Currency<select name="original_currency"><option>AUD</option><option>CNY</option></select></label>
-    <label>Received date<input name="received_date" type="date"></label>
-    <label>Received via<input name="received_via" placeholder="Cash / Transfer"></label>
+    <label>Bond paid date<input name="received_date" type="date"></label>
+    <label>Payment method<input name="received_via" placeholder="Cash / Transfer / EFT"></label>
+    <label>Reference<input name="reference" placeholder="Receipt / transfer ref (optional)"></label>
+    <label id="bond-edit-reason-label" class="hidden">Edit reason<input name="edit_reason" placeholder="Why is this being corrected?"></label>
   </div>
   <label style="margin-top:12px">Notes<textarea name="notes" rows="3"></textarea></label>
   <div id="bond-error" class="error hidden"></div>
-  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-dialog">Cancel</button><button class="btn primary">Save bond</button></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-dialog">Cancel</button><button class="btn primary" id="bond-save-btn">Save bond</button></div>
 </form></dialog>
 
 <dialog id="room-dialog"><form id="room-form" class="dialog-body">
@@ -1101,7 +1104,7 @@ function roomsAvailabilityNote(roomIds,start,end){
 }
 function displayCleanNotes(notes){
   let n=String(notes||'');
-  for(const key of ['ROOM_IDS','BOOKING_GROUP','SEGMENT_INDEX','SEGMENT_COUNT','CALCULATED_RENT','RENT_OVERRIDE','RENT_OVERRIDE_BY','RENT_OVERRIDE_AT','RENT_OVERRIDE_NOTE','REMINDER_SENT','CANCEL_DATE','CANCEL_REASON','CANCELLED_BY','DEPOSIT_TREATMENT','RENT_TREATMENT','ORIGINAL_AMOUNT','PAYMENT_ID','AMOUNT_LOCKED','MANUAL_AMOUNT','PAYMENT_CURRENCY','ACTION_ID','IDEMPOTENCY_KEY','EXTRA_ROOM_FEE','TENANCY_ID','DEPOSIT_PAYMENT_ID','DEPOSIT_ACTION_ID','BOND_ID','LIFECYCLE','INSPECTION_COMPLETED','VIEWING_ID','SOURCE','PAYMENT_TYPE']){
+  for(const key of ['ROOM_IDS','BOOKING_GROUP','SEGMENT_INDEX','SEGMENT_COUNT','CALCULATED_RENT','RENT_OVERRIDE','RENT_OVERRIDE_BY','RENT_OVERRIDE_AT','RENT_OVERRIDE_NOTE','REMINDER_SENT','CANCEL_DATE','CANCEL_REASON','CANCELLED_BY','DEPOSIT_TREATMENT','RENT_TREATMENT','ORIGINAL_AMOUNT','PAYMENT_ID','AMOUNT_LOCKED','MANUAL_AMOUNT','PAYMENT_CURRENCY','ACTION_ID','IDEMPOTENCY_KEY','EXTRA_ROOM_FEE','TENANCY_ID','DEPOSIT_PAYMENT_ID','DEPOSIT_ACTION_ID','BOND_ID','LIFECYCLE','INSPECTION_COMPLETED','VIEWING_ID','SOURCE','PAYMENT_TYPE','BOND_REFERENCE']){
     n=stripNoteMarker(n,key);
   }
   return n.trim();
@@ -1843,11 +1846,19 @@ function latestPaymentForTenancy(id){return state.payments.filter(p=>Number(p.te
 
 
 function bondForTenancy(id){return state.bonds.find(b=>Number(b.tenancy_id)===Number(id))}
+/** Refunded + forfeited + deducted outflows against the original bond amount. */
+function bondCommittedOutflows(b){
+  return Number(b?.refund_amount||0)+Number(b?.forfeited_amount||0)+Number(b?.deduction_amount||0);
+}
+function bondComputedRemaining(b){
+  if(!b)return null;
+  return Math.max(0,Number(b.amount||0)-bondCommittedOutflows(b));
+}
 function bondRemaining(b){
   if(!b)return null;
-  if(b.remaining_amount!==null&&b.remaining_amount!==undefined)return Number(b.remaining_amount);
-  const refunded=Number(b.refund_amount||0),deduct=Number(b.deduction_amount||0),forfeit=Number(b.forfeited_amount||0);
-  return Math.max(0,Number(b.amount||0)-refunded-deduct-forfeit);
+  // Amount is source of truth after Edit Bond — always derive remaining from amount − outflows.
+  // Stored remaining_amount is kept in sync on edit/refund actions for DB consumers.
+  return bondComputedRemaining(b);
 }
 function bondForfeited(b){return Number(b?.forfeited_amount||0)}
 function bondRefundedTotal(b){return Number(b?.refund_amount||0)}
@@ -1866,6 +1877,96 @@ function validateDepositSplit(original,refunded,forfeited){
   if(r<0||f<0)return 'Amounts cannot be negative.';
   if(r+f>o+0.009)return 'Refunded + forfeited cannot exceed original deposit.';
   return '';
+}
+/**
+ * Validate editing the original bond amount against existing refund/forfeit/deduction history.
+ * Blocks financially inconsistent states (e.g. amount 300 when 400 already refunded).
+ */
+function validateBondAmountEdit(b,newAmount){
+  if(!b)return 'Bond not found.';
+  const amt=Number(newAmount);
+  if(!Number.isFinite(amt)||amt<0)return 'Bond amount must be a non-negative number.';
+  const out=bondCommittedOutflows(b);
+  if(out>amt+0.009){
+    return `Cannot set bond amount to ${amt}: already refunded/forfeited/deducted ${out}. Resolve those records before reducing the original bond.`;
+  }
+  return '';
+}
+function bondReferenceFromNotes(notes){
+  return parseNoteMarker(notes,'BOND_REFERENCE')||'';
+}
+function withBondReference(notes,reference){
+  const ref=String(reference||'').trim();
+  if(!ref)return stripNoteMarker(notes,'BOND_REFERENCE');
+  return upsertNoteMarker(notes,'BOND_REFERENCE',ref);
+}
+/**
+ * Pure plan for Edit Bond — updates ONE existing bond row; never creates a second bond.
+ * Returns {ok,error,patch,audit,warning}.
+ */
+function planBondEdit(existing,fields={}){
+  if(!existing||!existing.id)return {ok:false,error:'Bond not found.'};
+  const nextAmount=fields.amount!=null&&fields.amount!==''?Number(fields.amount):Number(existing.amount||0);
+  const amountErr=validateBondAmountEdit(existing,nextAmount);
+  if(amountErr)return {ok:false,error:amountErr};
+  const currency=(fields.original_currency||existing.original_currency||existing.currency||'AUD')==='CNY'?'CNY':'AUD';
+  const received_date=fields.received_date||existing.received_date||null;
+  const received_via=fields.received_via!=null?String(fields.received_via||'').trim()||null:(existing.received_via||null);
+  const bond_type=fields.bond_type||existing.bond_type||'bond';
+  const editReason=String(fields.edit_reason||'').trim();
+  let notes=fields.notes!=null?String(fields.notes):String(existing.notes||'');
+  // Strip display-only edit markers before re-applying reference
+  notes=stripNoteMarker(notes,'BOND_REFERENCE');
+  notes=withBondReference(notes,fields.reference!=null?fields.reference:bondReferenceFromNotes(existing.notes));
+  const remaining=Math.max(0,nextAmount-bondCommittedOutflows(existing));
+  const patch={
+    amount:nextAmount,
+    currency,
+    original_currency:currency,
+    received_date,
+    bond_type,
+    received_via,
+    notes:notes||null,
+    remaining_amount:remaining,
+    remaining_description:remaining===nextAmount&&bondCommittedOutflows(existing)<=0
+      ?'Held'
+      :`Remaining after edit: ${remaining}`
+  };
+  const changes=[];
+  if(Number(existing.amount||0)!==nextAmount)changes.push({field:'amount',old:Number(existing.amount||0),new:nextAmount});
+  if(String(existing.received_date||'')!==String(received_date||''))changes.push({field:'received_date',old:existing.received_date||null,new:received_date});
+  if(String(existing.received_via||'')!==String(received_via||''))changes.push({field:'received_via',old:existing.received_via||null,new:received_via});
+  if(String(existing.bond_type||'')!==String(bond_type||''))changes.push({field:'bond_type',old:existing.bond_type||null,new:bond_type});
+  if(String(existing.original_currency||existing.currency||'AUD')!==currency)changes.push({field:'currency',old:existing.original_currency||existing.currency||'AUD',new:currency});
+  const oldRef=bondReferenceFromNotes(existing.notes);
+  const newRef=bondReferenceFromNotes(notes);
+  if(oldRef!==newRef)changes.push({field:'reference',old:oldRef||null,new:newRef||null});
+  if(String(existing.notes||'')!==String(notes||''))changes.push({field:'notes',old:existing.notes||null,new:notes||null});
+  const out=bondCommittedOutflows(existing);
+  let warning=null;
+  if(out>0&&Number(existing.amount||0)!==nextAmount){
+    warning=`This bond already has refund/forfeit/deduction totaling ${out}. Remaining will become ${remaining}.`;
+  }
+  const auditLines=changes.filter(c=>c.field!=='notes').map(c=>`${c.field}: ${c.old??'—'} → ${c.new??'—'}`);
+  if(editReason)auditLines.push(`reason: ${editReason}`);
+  return {
+    ok:true,
+    error:null,
+    warning,
+    patch,
+    changes,
+    audit:{
+      action:'edit_bond',
+      amount:nextAmount,
+      currency,
+      method:received_via,
+      reference:newRef||null,
+      notes:auditLines.length?`Bond edited. ${auditLines.join('; ')}`:'Bond edited (no field changes).',
+      previous_amount:Number(existing.amount||0),
+      new_amount:nextAmount,
+      edit_reason:editReason||null
+    }
+  };
 }
 function actionFingerprint(t){
   return `tenancy:${t.id}|due:${nextRentDue(t)||''}|amt:${paymentDueAmount(t)}`;
@@ -3059,7 +3160,7 @@ function bondsPage(){
   const historyRows=all; // history for all bonds on this property (current + past)
   return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Current = held / unresolved (including ended stays awaiting refund). Past = stay ended/cancelled <b>and</b> bond financially finalised.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
   <div class="tenant-tools"><div class="view-switch"><button class="${filter==='current'?'active':''}" data-bfilter="current">Current (${currentRows.length})</button><button class="${filter==='past'?'active':''}" data-bfilter="past">Past (${pastRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${esc(bondBucket(b))}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / forfeit</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${esc(filter)} bond records.</div>`}</section>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${esc(bondBucket(b))}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit Bond</button><button class="btn ghost bond-action" data-bond="${b.id}">Record Refund</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${esc(filter)} bond records.</div>`}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (current and past).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
@@ -3592,13 +3693,33 @@ function openEditPayment(id){
   f.elements.tenancy_id.onchange=null;
   $('#payment-dialog').showModal();
 }
-function openBond(){const f=$('#bond-form');f.reset();if(f.elements.id)f.elements.id.value='';if(f.elements.tenancy_id)f.elements.tenancy_id.disabled=false;const title=$('#bond-dialog-title');if(title)title.textContent='Add bond / deposit';f.elements.tenancy_id.innerHTML=tenancyOptions();f.elements.received_date.value=today();$('#bond-dialog').showModal()}
+function openBond(){
+  const f=$('#bond-form');f.reset();
+  if(f.elements.id)f.elements.id.value='';
+  if(f.elements.tenancy_id)f.elements.tenancy_id.disabled=false;
+  const title=$('#bond-dialog-title');if(title)title.textContent='Record bond / deposit';
+  const sub=$('#bond-dialog-sub');if(sub){sub.textContent='Creates one bond record for the selected stay.';sub.classList.remove('hidden')}
+  const warn=$('#bond-edit-warning');if(warn){warn.classList.add('hidden');warn.textContent=''}
+  const reasonLabel=$('#bond-edit-reason-label');if(reasonLabel)reasonLabel.classList.add('hidden');
+  if(f.elements.edit_reason)f.elements.edit_reason.value='';
+  if(f.elements.reference)f.elements.reference.value='';
+  f.elements.tenancy_id.innerHTML=tenancyOptions();
+  f.elements.received_date.value=today();
+  const saveBtn=$('#bond-save-btn');if(saveBtn)saveBtn.textContent='Save bond';
+  $('#bond-error').classList.add('hidden');
+  $('#bond-dialog').showModal();
+}
 function openBondEdit(id){
   if(!canEdit())return;
   const b=state.bonds.find(x=>Number(x.id)===Number(id)); if(!b)return;
   const f=$('#bond-form'); f.reset();
   if(f.elements.id) f.elements.id.value=String(b.id);
-  f.elements.tenancy_id.innerHTML=tenancyOptions();
+  // Include historical tenancies so Edit Bond still resolves the linked stay.
+  f.elements.tenancy_id.innerHTML=tenancyOptions()+scopedTenancies().filter(t=>tenancyKind(t)==='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))} (past)</option>`).join('');
+  if(b.tenancy_id&&![...f.elements.tenancy_id.options].some(o=>Number(o.value)===Number(b.tenancy_id))){
+    const t=state.tenancies.find(x=>Number(x.id)===Number(b.tenancy_id));
+    if(t)f.elements.tenancy_id.insertAdjacentHTML('beforeend',`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`);
+  }
   f.elements.tenancy_id.value=String(b.tenancy_id);
   f.elements.tenancy_id.disabled=true;
   if(f.elements.bond_type) f.elements.bond_type.value=b.bond_type||'bond';
@@ -3606,8 +3727,23 @@ function openBondEdit(id){
   if(f.elements.original_currency) f.elements.original_currency.value=b.original_currency==='CNY'?'CNY':'AUD';
   if(f.elements.received_date) f.elements.received_date.value=b.received_date||'';
   if(f.elements.received_via) f.elements.received_via.value=b.received_via||'';
-  if(f.elements.notes) f.elements.notes.value=b.notes||'';
-  const title=$('#bond-dialog-title'); if(title) title.textContent='Edit bond / deposit';
+  if(f.elements.reference) f.elements.reference.value=bondReferenceFromNotes(b.notes)||'';
+  if(f.elements.notes) f.elements.notes.value=displayCleanNotes(b.notes)||'';
+  if(f.elements.edit_reason) f.elements.edit_reason.value='';
+  const title=$('#bond-dialog-title'); if(title) title.textContent='Edit Bond';
+  const sub=$('#bond-dialog-sub');if(sub){sub.textContent='Corrects this bond record in place. Does not create another Bond Paid entry.';sub.classList.remove('hidden')}
+  const reasonLabel=$('#bond-edit-reason-label');if(reasonLabel)reasonLabel.classList.remove('hidden');
+  const out=bondCommittedOutflows(b);
+  const warn=$('#bond-edit-warning');
+  if(warn){
+    if(out>0){
+      warn.classList.remove('hidden');
+      warn.innerHTML=`<b>Refund/forfeit history exists</b> (total ${esc(money(out,b.original_currency==='CNY'?'CNY':'AUD'))}). Reducing the bond below that total is blocked. Remaining will stay consistent with amount − refunds/forfeits/deductions.`;
+    }else{
+      warn.classList.add('hidden');warn.textContent='';
+    }
+  }
+  const saveBtn=$('#bond-save-btn');if(saveBtn)saveBtn.textContent='Save corrections';
   $('#bond-error').classList.add('hidden');
   $('#bond-dialog').showModal();
 }
@@ -4130,27 +4266,70 @@ $('#payment-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#bond-form').onsubmit=async e=>{
-  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-error');err.classList.add('hidden');
+  e.preventDefault();if(!canEdit())return;
+  const f=e.currentTarget,fd=new FormData(f),err=$('#bond-error');err.classList.add('hidden');
   const editId=Number(fd.get('id')||0);
-  const row={
-    tenancy_id:Number(fd.get('tenancy_id')),
-    amount:Number(fd.get('amount')),
-    currency:fd.get('original_currency'),
-    original_currency:fd.get('original_currency'),
-    received_date:fd.get('received_date')||today(),
-    bond_type:fd.get('bond_type'),
-    received_via:fd.get('received_via')||null,
-    notes:fd.get('notes')||null
-  };
   try{
     if(editId){
-      // Edit legitimate bond fields only — do not rewrite refund/forfeit event history.
-      await patch('bonds',`id=eq.${editId}`,row);
+      const existing=state.bonds.find(x=>Number(x.id)===editId);
+      if(!existing){err.textContent='Bond not found.';err.classList.remove('hidden');return}
+      const plan=planBondEdit(existing,{
+        amount:fd.get('amount'),
+        original_currency:fd.get('original_currency'),
+        received_date:fd.get('received_date')||today(),
+        bond_type:fd.get('bond_type'),
+        received_via:fd.get('received_via')||null,
+        reference:fd.get('reference')||'',
+        notes:fd.get('notes')||'',
+        edit_reason:fd.get('edit_reason')||''
+      });
+      if(!plan.ok){err.textContent=plan.error;err.classList.remove('hidden');return}
+      if(plan.warning&&!confirm(plan.warning+'\n\nSave this bond correction?'))return;
+      // Update the SAME bond row — never insert a second bond.
+      await patch('bonds',`id=eq.${editId}`,plan.patch);
       const uid=getSession()?.user?.id||null;
-      insert('activity_log',{user_id:uid,action:'edit_bond',entity_type:'bond',entity_id:editId,details:row}).catch(()=>{});
-      toast('Bond updated');
+      await insert('bond_refund_events',{
+        bond_id:editId,
+        action:'edit_bond',
+        amount:plan.audit.new_amount,
+        currency:plan.audit.currency,
+        method:plan.audit.method,
+        reference:plan.audit.reference,
+        notes:plan.audit.notes,
+        created_by:uid
+      }).catch(()=>{});
+      insert('activity_log',{
+        user_id:uid,
+        action:'edit_bond',
+        entity_type:'bond',
+        entity_id:editId,
+        details:{
+          previous_amount:plan.audit.previous_amount,
+          new_amount:plan.audit.new_amount,
+          changes:plan.changes,
+          edit_reason:plan.audit.edit_reason,
+          edited_at:new Date().toISOString()
+        }
+      }).catch(()=>{});
+      toast('Bond updated — same record corrected');
     }else{
-      await insert('bonds',{...row,received:true,refunded:false});
+      let notes=fd.get('notes')||'';
+      notes=withBondReference(notes,fd.get('reference')||'');
+      const amount=Number(fd.get('amount'));
+      await insert('bonds',{
+        tenancy_id:Number(fd.get('tenancy_id')),
+        amount,
+        currency:fd.get('original_currency'),
+        original_currency:fd.get('original_currency'),
+        received_date:fd.get('received_date')||today(),
+        bond_type:fd.get('bond_type'),
+        received_via:fd.get('received_via')||null,
+        notes:notes||null,
+        received:true,
+        refunded:false,
+        remaining_amount:amount,
+        remaining_description:'Held'
+      });
       toast('Bond saved');
     }
     f.reset(); if(f.elements.id)f.elements.id.value=''; if(f.elements.tenancy_id)f.elements.tenancy_id.disabled=false;

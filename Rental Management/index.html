@@ -44,9 +44,24 @@ label{display:grid;gap:6px;font-weight:700;font-size:12px}
 .staychip{font-size:12px;border-radius:7px;padding:5px 6px;background:var(--accentSoft);color:#294b91;border-left:3px solid var(--accent)}
 .staychip.upcoming{background:var(--purpleSoft);color:var(--purple);border-left-color:var(--purple)}
 .staychip.depart{background:var(--amberSoft);color:var(--amber);border-left-color:var(--amber)}
+.staychip.available{background:var(--greenSoft);color:var(--green);border-left-color:var(--green);font-weight:750}
+.cal-matrix-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff;max-width:100%}
+.cal-matrix{display:grid;gap:0;min-width:max-content}
+.cal-cell{min-height:44px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px 7px;font-size:11px;display:grid;align-content:center;gap:4px}
+.cal-cell.head{background:#f8fafc;font-weight:800;position:sticky;top:0;z-index:3;text-align:center;min-width:64px}
+.cal-cell.room{position:sticky;left:0;background:#fff;z-index:2;font-weight:800;min-width:88px;border-right:2px solid var(--line)}
+.cal-cell.head.room{z-index:4}
+.cal-cell.available{background:var(--greenSoft);color:var(--green);font-weight:750}
+.cal-cell.occupied{background:#eaf0ff;color:#2547b6}
+.cal-cell.upcoming-cell{background:var(--purpleSoft);color:var(--purple)}
+.cal-cell.depart-cell{background:#fff8eb}
+.cal-cell.weekend-col{background:#fafbff}
+.cal-cell.available.weekend-col{background:#e7f6ec}
+.cal-avail{font-weight:750}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted);align-items:center}.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px;vertical-align:middle}
+.legend .lg-available{background:var(--green)}.legend .lg-current{background:var(--accent)}.legend .lg-upcoming{background:var(--purple)}.legend .lg-depart{background:var(--amber)}.legend .lg-insp{background:#7c3aed}
 .view-switch{display:flex;gap:6px;background:#f2f4f7;padding:4px;border-radius:10px}.view-switch button{border:0;background:transparent;padding:8px 12px;border-radius:8px;font-weight:800;cursor:pointer}.view-switch button.active{background:#fff;box-shadow:0 1px 4px #10182818;color:var(--accent)}
 .finder{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end}.vacancy-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}.vacancy-card h3{margin:0 0 8px}.vacancy-slot{padding:7px 9px;margin-top:6px;border-radius:8px;background:var(--greenSoft);color:var(--green);font-weight:750}
-.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted)}.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px}.cal-cell{min-height:38px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px;font-size:10px}.cal-cell.head{background:#fafbfc;font-weight:800;position:sticky;top:0}.cal-cell.room{position:sticky;left:0;background:#fff;z-index:2;font-weight:800}.cal-cell.occupied{background:#eaf0ff;color:#2547b6}.cal-cell.arrival{box-shadow:inset 3px 0 0 #2d5bff}.cal-cell.departure{box-shadow:inset -3px 0 0 #b42318}
 .price-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-card{border:1px solid var(--line);border-radius:13px;padding:14px;background:#fff;box-shadow:0 2px 10px #10182808}.alert-card strong{font-size:24px}.alert-card strong{display:block;font-size:22px;margin-top:4px}.tenant-actions{display:flex;gap:6px;flex-wrap:wrap}.danger-text{color:var(--red);font-weight:750}dl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0 0}dt{font-size:11px;color:var(--muted)}dd{margin:0;text-align:right;font-size:12px;font-weight:750}
 
 .find-result-panel{margin-top:14px;padding:16px 18px;border:2px solid var(--green);border-radius:14px;background:linear-gradient(180deg,#f3faf5,#fff);box-shadow:0 8px 24px rgba(22,101,52,.08)}
@@ -493,9 +508,27 @@ function roomShortName(r){if(!r)return'Unassigned';return isSofaRoom(r)?'Sofa':`
 function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&r.ensuite)?`${n} · Ensuite`:n}
 function roomChipLabel(r){if(!r)return'Other';return isSofaRoom(r)?'Sofa':`R${r.room_no}`}
 function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';const prop=propertyBy(r.property_id)?.name||'';return `${prop} ${roomShortName(r)}`.trim()}
-function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort((a,b)=>{
-  const as=isSofaRoom(a)?1:0,bs=isSofaRoom(b)?1:0;if(as!==bs)return as-bs;return Number(a.room_no)-Number(b.room_no);
-})}
+/**
+ * Natural room order for Calendar / lists: Room 1…9,10,11 (not 1,10,11,2).
+ * Sofa / Extra room after numbered rooms. Does not change room IDs or names.
+ */
+function roomSortKey(r){
+  if(!r)return{kind:9,n:Number.POSITIVE_INFINITY,label:''};
+  if(isSofaRoom(r))return{kind:2,n:Number.POSITIVE_INFINITY,label:'Sofa'};
+  const rawNo=r.room_no;
+  const n=Number(rawNo);
+  if(Number.isFinite(n))return{kind:0,n,label:String(rawNo)};
+  const fromText=String(rawNo??r.notes??'').match(/(\d+)/);
+  if(fromText)return{kind:0,n:Number(fromText[1]),label:fromText[1]};
+  return{kind:1,n:0,label:String(rawNo??roomShortName(r)??'')};
+}
+function compareRoomsNatural(a,b){
+  const ka=roomSortKey(a),kb=roomSortKey(b);
+  if(ka.kind!==kb.kind)return ka.kind-kb.kind;
+  if(ka.n!==kb.n)return ka.n-kb.n;
+  return String(ka.label).localeCompare(String(kb.label),undefined,{numeric:true,sensitivity:'base'})||Number(a.id)-Number(b.id);
+}
+function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort(compareRoomsNatural)}
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
 function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
@@ -2887,6 +2920,20 @@ function stayBlocksDate(t,date){
   const end=reservedEnd(t);
   return date>=t.check_in&&(!end||date<end);
 }
+/** True when room has no valid occupancy blocking this calendar date (same SoT as Availability). */
+function roomDateAvailable(roomId,date,ts){
+  const list=ts||state.tenancies||[];
+  return !list.some(t=>Number(t.room_id)===Number(roomId)&&stayBlocksDate(t,date));
+}
+function calendarStayChip(t,iso){
+  const name=tenantBy(t.tenant_id)?.name||'Tenant';
+  const arrival=t.check_in===iso;
+  const departure=effectiveOccupancyEnd(t)===iso;
+  let cls=tenancyKind(t)==='upcoming'?'upcoming':'';
+  if(departure&&!stayBlocksDate(t,iso))cls='depart';
+  const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';
+  return `<div class="staychip ${cls}"><b>${esc(name)}</b>${esc(time)}</div>`;
+}
 function roomOccupiedOverlap(roomId,start,end){
   if(!roomId||!start)return false;
   const endEx=end||'9999-12-31';
@@ -2948,21 +2995,45 @@ function availabilityPage(){
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
       <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
   }
-  const jsDay=start.getDay(), mondayIndex=(jsDay+6)%7;let cells='';
-  for(let i=0;i<mondayIndex;i++)cells+=`<div class="day90 out"></div>`;
+  // Room × date matrix — rooms in natural order; GREEN = roomDateAvailable via stayBlocksDate SoT.
+  const dates=[];
   for(let i=0;i<90;i++){
-    const d=new Date(start);d.setDate(d.getDate()+i);const iso=d.toISOString().slice(0,10),dow=(d.getDay()+6)%7;
-    const active=ts.filter(t=>!isOperationallyClosed(t)&&stayBlocksDate(t,iso));
-    const departing=ts.filter(t=>{
-      if(isOperationallyClosed(t))return false;
-      const end=effectiveOccupancyEnd(t);
-      return end===iso&&!active.some(a=>Number(a.id)===Number(t.id));
-    });
-    const chips=[...active,...departing].map(t=>{const name=tenantBy(t.tenant_id)?.name||'Tenant',arrival=t.check_in===iso,departure=effectiveOccupancyEnd(t)===iso;let cls=tenancyKind(t)==='upcoming'?'upcoming':'';if(departure)cls='depart';const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';return `<div class="staychip ${cls}"><b>${esc(t.room_id?roomChipLabel(roomBy(t.room_id)):(t.sleeping_location||'Other'))}</b> ${esc(name)}${esc(time)}</div>`}).join('');
-    const viewChips=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past').map(v=>`<div class="staychip upcoming"><b>Insp</b> ${esc(v.visitor_name||'Visitor')} · ${esc(viewingRoomsLabel(v))} · ${esc((v.inspection_time||'').slice(0,5)||'?')}</div>`).join('');
-    cells+=`<div class="day90 ${dow>=5?'weekend':''}"><div class="date90"><span>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</span><small>${weekdays[dow].slice(0,3)}</small></div>${chips||''}${viewChips||''}${!(chips||viewChips)?'<div class="muted small">Available</div>':''}</div>`;
+    const d=new Date(start);d.setDate(d.getDate()+i);
+    dates.push({iso:d.toISOString().slice(0,10),d,dow:(d.getDay()+6)%7});
   }
-  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · purple chips = booked inspections</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}<div class="legend" style="margin-top:0"><span>Current</span><span>Upcoming</span><span>Check-out</span></div></div></div><div class="calendar90">${weekdays.map(w=>`<div class="weekday">${w}</div>`).join('')}${cells}</div></section>`;
+  const colCount=1+dates.length;
+  let matrix=`<div class="cal-cell head room">Room</div>`;
+  dates.forEach(({iso,d,dow})=>{
+    matrix+=`<div class="cal-cell head ${dow>=5?'weekend-col':''}"><div>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</div><small class="muted">${weekdays[dow].slice(0,3)}</small></div>`;
+  });
+  rooms.forEach(r=>{
+    matrix+=`<div class="cal-cell room">${esc(roomShortName(r))}</div>`;
+    dates.forEach(({iso,dow})=>{
+      const roomTs=ts.filter(t=>Number(t.room_id)===Number(r.id));
+      const active=roomTs.filter(t=>stayBlocksDate(t,iso));
+      const departing=roomTs.filter(t=>{
+        if(isOperationallyClosed(t))return false;
+        const end=effectiveOccupancyEnd(t);
+        return end===iso&&!active.some(a=>Number(a.id)===Number(t.id));
+      });
+      const insp=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past'&&viewingRoomIds(v).some(id=>Number(id)===Number(r.id)));
+      const weekend=dow>=5?'weekend-col':'';
+      if(active.length){
+        const kind=active.some(t=>tenancyKind(t)==='upcoming')?'upcoming-cell':'occupied';
+        const chips=active.map(t=>calendarStayChip(t,iso)).join('')+(departing.length?departing.map(t=>calendarStayChip(t,iso)).join(''):'');
+        const inspHtml=insp.length?`<div class="staychip upcoming"><b>Insp</b> ${esc(insp[0].visitor_name||'Visitor')}</div>`:'';
+        matrix+=`<div class="cal-cell ${kind} ${weekend}">${chips}${inspHtml}</div>`;
+      }else{
+        // Genuine free day for this room (half-open checkout already frees this date).
+        const turn=departing.map(t=>calendarStayChip(t,iso)).join('');
+        const inspHtml=insp.length?`<div class="staychip upcoming"><b>Insp</b> ${esc(insp[0].visitor_name||'Visitor')}</div>`:'';
+        matrix+=`<div class="cal-cell available ${weekend}"><span class="cal-avail">Available</span>${turn}${inspHtml}</div>`;
+      }
+    });
+  });
+  const legend=`<div class="legend" style="margin-top:0"><span><i class="lg-available"></i>Available (green)</span><span><i class="lg-current"></i>Current / Occupied</span><span><i class="lg-upcoming"></i>Upcoming / Reserved</span><span><i class="lg-depart"></i>Check-out</span><span><i class="lg-insp"></i>Inspection</span></div>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · rooms in natural order · green = available via stay occupancy SoT</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}${legend}</div></div>
+  <div class="cal-matrix-wrap"><div class="cal-matrix" style="grid-template-columns:88px repeat(${dates.length},minmax(68px,1fr))">${matrix}</div></div></section>`;
 }
 function viewingsPage(){
   const filter=state.viewingFilter||'upcoming';

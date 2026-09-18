@@ -6,7 +6,13 @@ const vm=require('vm');
 const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
 const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const cut=script.indexOf("$('#nav').onclick");
-let defs=(cut>0?script.slice(0,cut):script).replace(/\blet state=/,'var state=').replace(/\blet resendBusy=/,'var resendBusy=');
+let defs=(cut>0?script.slice(0,cut):script)
+  .replace(/\blet state=/,'var state=')
+  .replace(/\blet resendBusy=/,'var resendBusy=')
+  .replace(/\bconst today=/,'var today=')
+  .replace(/\bconst money=/,'var money=')
+  .replace(/\bconst esc=/,'var esc=')
+  .replace(/\bconst fmtDate=/,'var fmtDate=');
 const store={};
 const el=()=>({classList:{add(){},remove(){},toggle(){},contains:()=>true},textContent:'',innerHTML:'',style:{},disabled:false,value:'',reset(){},elements:{},onclick:null,dataset:{}});
 const sandbox={
@@ -22,6 +28,8 @@ const sandbox={
 };
 sandbox.global=sandbox;sandbox.globalThis=sandbox;sandbox.self=sandbox;
 vm.createContext(sandbox);vm.runInContext(defs,sandbox,{timeout:5000});
+// Pin calendar day inside the fixture stay window (wall-clock must not flake this suite).
+sandbox.today=()=>'2026-09-12';
 const S=sandbox.state;
 Object.assign(S,{
   propertyId:1,properties:[{id:1,name:'McGregor'}],

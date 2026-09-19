@@ -4834,21 +4834,8 @@ $('#tenancy-form').onsubmit=async e=>{
   const live=plan.live;
   const uid=getSession()?.user?.id||null;
   try{
-    // Soft-cancel removed allocations (never hard-delete historical/payment-linked rows).
-    for(const s of proposed.filter(x=>x._remove&&x.id)){
-      const old=state.tenancies.find(x=>Number(x.id)===Number(s.id));
-      if(!old||isOperationallyClosed(old))continue;
-      const notes=upsertNoteMarker(withCancelMarkers(old.notes,{
-        cancellation_date:today(),
-        cancellation_reason:'Allocation removed via Edit stay',
-        cancelled_by:uid,
-        deposit_treatment:depositTreatment(old)||'keep',
-        rent_treatment:rentTreatment(old)||'not_payable'
-      }),'SOURCE',parseNoteMarker(old.notes,'SOURCE')||'manual_stay');
-      await patch('tenancies',`id=eq.${s.id}`,{status:'cancelled',notes,cancelled_at:new Date().toISOString()});
-      await logBookingEvent({tenancy_id:s.id,event_type:'allocation_cancelled',notes:`Allocation removed. Room ${roomShortName(roomBy(old.room_id))} ${old.check_in||''}→${old.check_out||''}`});
-      insert('activity_log',{user_id:uid,action:'edit_stay_allocation_remove',entity_type:'tenancy',entity_id:String(s.id),details:{previous_room:old.room_id,previous_check_in:old.check_in,previous_check_out:old.check_out}}).catch(()=>{});
-    }
+    // Apply live allocation patches/inserts first, then soft-cancel removals.
+    // Validation already gated above — this order avoids releasing a room before its replacement exists.
     const savedIds=[];
     for(let i=0;i<live.length;i++){
       const s=live[i];
@@ -4909,11 +4896,29 @@ $('#tenancy-form').onsubmit=async e=>{
         }
       }
     }
+    // Soft-cancel removed allocations only after live rows saved (never hard-delete historical/payment-linked rows).
+    for(const s of proposed.filter(x=>x._remove&&x.id)){
+      const old=state.tenancies.find(x=>Number(x.id)===Number(s.id));
+      if(!old||isOperationallyClosed(old))continue;
+      const notes=upsertNoteMarker(withCancelMarkers(old.notes,{
+        cancellation_date:today(),
+        cancellation_reason:'Allocation removed via Edit stay',
+        cancelled_by:uid,
+        deposit_treatment:depositTreatment(old)||'keep',
+        rent_treatment:rentTreatment(old)||'not_payable'
+      }),'SOURCE',parseNoteMarker(old.notes,'SOURCE')||'manual_stay');
+      await patch('tenancies',`id=eq.${s.id}`,{status:'cancelled',notes,cancelled_at:new Date().toISOString()});
+      await logBookingEvent({tenancy_id:s.id,event_type:'allocation_cancelled',notes:`Allocation removed. Room ${roomShortName(roomBy(old.room_id))} ${old.check_in||''}→${old.check_out||''}`});
+      insert('activity_log',{user_id:uid,action:'edit_stay_allocation_remove',entity_type:'tenancy',entity_id:String(s.id),details:{previous_room:old.room_id,previous_check_in:old.check_in,previous_check_out:old.check_out}}).catch(()=>{});
+    }
     // If we promoted solo→group, ensure original markers exist on all live rows (already written above).
     $('#tenancy-dialog').close();
     toast(live.length>1?`Stay updated · ${live.length} room allocations`:'Stay updated');
     await loadAll();
-  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+  }catch(ex){
+    err.textContent=(ex.message||'Save failed')+' — booking was not fully updated; review allocations and retry. No validation-failed partial save was applied.';
+    err.classList.remove('hidden');
+  }
 };
 const stayOngoingEl=$('#stay-ongoing'); if(stayOngoingEl) stayOngoingEl.onchange=()=>updateStayRentPreview();
 const stayAddSegBtn=$('#stay-add-segment');

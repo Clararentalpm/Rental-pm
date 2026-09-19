@@ -452,6 +452,7 @@ function propertyTimeZone(p){
   const raw=p?.timezone||p?.time_zone||property()?.timezone||property()?.time_zone;
   return raw||'Australia/Brisbane';
 }
+/** Format a Date as YYYY-MM-DD in the given IANA timezone (never toISOString UTC). */
 function localDateISO(date=new Date(),timeZone=propertyTimeZone()){
   try{
     return new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
@@ -460,9 +461,59 @@ function localDateISO(date=new Date(),timeZone=propertyTimeZone()){
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
 }
+/** HH:MM in property timezone. Overridable in tests via assigning localTimeHM. */
+function localTimeHM(date=new Date(),timeZone=propertyTimeZone()){
+  try{
+    const parts=new Intl.DateTimeFormat('en-GB',{timeZone,hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(date);
+    const h=parts.find(p=>p.type==='hour')?.value||'00';
+    const m=parts.find(p=>p.type==='minute')?.value||'00';
+    return `${h.padStart(2,'0')}:${m.padStart(2,'0')}`;
+  }catch(_e){
+    const d=date instanceof Date?date:new Date();
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+}
+/**
+ * Parse a DATE-ONLY string (YYYY-MM-DD) as a local calendar day at noon.
+ * Avoids `new Date('YYYY-MM-DD')` (UTC midnight) and toISOString day-shifts in Brisbane.
+ */
+function parseLocalDateOnly(iso,hour=12,minute=0){
+  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m)return null;
+  return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]),hour,minute,0,0);
+}
+/** Normalize stored time to HH:MM. */
+function normalizeClock(raw,fallback='00:00'){
+  const s=String(raw||'').trim();
+  const m=s.match(/^(\d{1,2}):(\d{2})/);
+  if(!m)return fallback;
+  return `${String(Number(m[1])).padStart(2,'0')}:${m[2]}`;
+}
+/** Local Date from date-only + optional HH:MM (property-local wall clock, no UTC date shift). */
+function parseLocalDateTime(isoDate,timeHM,fallbackTime='00:00'){
+  const m=String(isoDate||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m)return null;
+  const hm=normalizeClock(timeHM,fallbackTime);
+  const [hh,mm]=hm.split(':').map(Number);
+  return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]),hh||0,mm||0,0,0);
+}
+/** Add days to a YYYY-MM-DD using local calendar arithmetic — never toISOString. */
+function addDays(iso,days){
+  if(!iso)return null;
+  const d=parseLocalDateOnly(iso,12,0);
+  if(!d)return null;
+  d.setDate(d.getDate()+Number(days||0));
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 const today=()=>localDateISO(new Date(),propertyTimeZone());
 const money=(v,c='AUD')=>v===null||v===undefined||v===''?'—':new Intl.NumberFormat('en-AU',{style:'currency',currency:c,maximumFractionDigits:0}).format(Number(v));
-const fmtDate=v=>v?new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(v+'T00:00:00')):'—';
+/** Format DATE-ONLY values without UTC conversion (Brisbane-safe). */
+const fmtDate=v=>{
+  if(!v)return'—';
+  const d=parseLocalDateOnly(String(v).slice(0,10),12,0);
+  if(!d||Number.isNaN(d.getTime()))return'—';
+  return new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(d);
+};
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
 let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'current',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property'};
 
@@ -576,19 +627,33 @@ function isOperationallyClosed(t){
   const st=normalizeBookingStatus(t);
   return ['historical','ended','inactive','completed','deleted','superseded'].includes(st);
 }
-/** True only for a stay that occupies the room on onDate (half-open checkout). */
+/** True when local now has reached this stay's check-in date+time (Brisbane wall clock). */
+function hasReachedCheckIn(t,onDate=today(),onTime=null){
+  if(!t?.check_in)return false;
+  if(t.check_in<onDate)return true;
+  if(t.check_in>onDate)return false;
+  const cin=normalizeClock(t.check_in_time,'00:00');
+  const nowHM=onTime||localTimeHM();
+  return nowHM>=cin;
+}
+/** True only for a stay that occupies the room on onDate (half-open checkout date; time-aware on start day). */
 function isCurrentOccupancyStay(t,onDate=today()){
   if(!t||!t.check_in)return false;
   if(isOperationallyClosed(t))return false;
   if(t.check_in>onDate)return false;
   const end=effectiveOccupancyEnd(t);
   if(end&&end<=onDate)return false;
+  // Start day before check-in time → not yet current occupancy.
+  if(t.check_in===onDate&&!hasReachedCheckIn(t,onDate))return false;
   return true;
 }
 function isUpcomingOccupancyStay(t,onDate=today()){
   if(!t||!t.check_in)return false;
   if(isOperationallyClosed(t))return false;
-  return t.check_in>onDate;
+  if(t.check_in>onDate)return true;
+  // Same day, not yet at check-in time.
+  if(t.check_in===onDate&&!hasReachedCheckIn(t,onDate))return true;
+  return false;
 }
 function currentOccupantsForRoom(roomId,onDate=today()){
   return scopedTenancies().filter(t=>Number(t.room_id)===Number(roomId)&&isCurrentOccupancyStay(t,onDate));
@@ -1654,8 +1719,8 @@ function overdueDays(t){
 }
 /**
  * Canonical operational stay classification (segment-level).
- * Derived from booking dates + closed lifecycle — NOT stale stored status ("upcoming").
- * CURRENT: start <= today < end (half-open). UPCOMING: start > today. HISTORICAL: closed or end <= today.
+ * Derived from booking dates/times + closed lifecycle — NOT stale stored status ("upcoming").
+ * CURRENT: check-in reached and before effective end. UPCOMING: before check-in. HISTORICAL: closed or end <= today.
  */
 function tenancyKind(t,onDate=today()){
   if(!t)return'historical';
@@ -1663,7 +1728,7 @@ function tenancyKind(t,onDate=today()){
   const end=effectiveOccupancyEnd(t);
   if(end&&end<=onDate)return'historical';
   if(t.check_in&&t.check_in>onDate)return'upcoming';
-  // Live occupancy window (includes TBC / stale stored "upcoming" once start has arrived).
+  if(t.check_in===onDate&&!hasReachedCheckIn(t,onDate))return'upcoming';
   return'current';
 }
 /** Earliest live allocation start across a booking group (or solo stay). */
@@ -1692,6 +1757,12 @@ function bookingOperationalKind(t,onDate=today()){
   const end=bookingOverallEnd(t);
   if(end&&end<=onDate)return'historical';
   if(start&&start>onDate)return'upcoming';
+  // Overall start day: stay Upcoming until the first live segment's check-in time.
+  if(start===onDate){
+    const first=live.filter(s=>s.check_in===start).sort((a,b)=>normalizeClock(a.check_in_time,'00:00').localeCompare(normalizeClock(b.check_in_time,'00:00')))[0]
+      ||live.slice().sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''))[0];
+    if(first&&!hasReachedCheckIn(first,onDate))return'upcoming';
+  }
   return'current';
 }
 /** Segment that is the tenant's physical room today (or next upcoming / last past). */
@@ -1948,7 +2019,6 @@ function badge(v){
   const cls=label.replaceAll(/\s+/g,'_');
   return `<span class="badge ${esc(cls)}">${esc(label)}</span>`;
 }
-function addDays(iso,days){if(!iso)return null;const d=new Date(iso+'T00:00:00');d.setDate(d.getDate()+days);return d.toISOString().slice(0,10)}
 function latestPaymentForTenancy(id){return state.payments.filter(p=>Number(p.tenancy_id)===Number(id)&&p.status!=='unpaid').sort((a,b)=>(b.period_end||b.received_date||'').localeCompare(a.period_end||a.received_date||''))[0]||null}
 
 
@@ -2652,10 +2722,12 @@ function weeklyEquivalentRent(t){
   return amt;
 }
 function weekBounds(d=today()){
-  const now=new Date(d+'T12:00:00'), dow=(now.getDay()+6)%7;
+  const now=parseLocalDateOnly(d,12,0)||new Date();
+  const dow=(now.getDay()+6)%7;
   const w0=new Date(now); w0.setDate(now.getDate()-dow);
   const w1=new Date(w0); w1.setDate(w0.getDate()+6);
-  return {start:w0.toISOString().slice(0,10), end:w1.toISOString().slice(0,10)};
+  const ymd=dt=>`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+  return {start:ymd(w0), end:ymd(w1)};
 }
 function propertyRentalPayments(){
   const ids=new Set(scopedTenancies().map(t=>Number(t.id)));
@@ -2731,7 +2803,7 @@ function monthlyPerformanceRows(year){
     const mm=String(m).padStart(2,'0');
     const start=`${y}-${mm}-01`;
     const endDate=new Date(Number(y),m,0);
-    const end=endDate.toISOString().slice(0,10);
+    const end=`${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-${String(endDate.getDate()).padStart(2,'0')}`;
     if(start>today())break;
     const cappedEnd=end>today()?today():end;
     const income=actualRentalIncomeInRange(start,cappedEnd);
@@ -2994,16 +3066,47 @@ function reservedEnd(t){
   if(t.tenancy_type==='long_term'&&(t.status==='active'||t.status==='upcoming'||t.status==='tbc'))return '9999-12-31';
   return t.check_in||null;
 }
+/**
+ * Canonical occupancy interval in local ms:
+ * [check_in date + check_in time, effective end date + check_out time)
+ * Defaults: in 00:00, out 12:00 (Brisbane noon) when times are absent.
+ */
+function occupancyInterval(t){
+  if(!t||!t.check_in||isOperationallyClosed(t))return null;
+  const start=parseLocalDateTime(t.check_in,t.check_in_time,'00:00');
+  if(!start)return null;
+  const endDay=effectiveOccupancyEnd(t);
+  const end=endDay?parseLocalDateTime(endDay,t.check_out_time,'12:00'):null;
+  return {startMs:start.getTime(),endMs:end?end.getTime():null,startDate:t.check_in,endDate:endDay||null};
+}
+function intervalsOverlapMs(a0,a1,b0,b1){
+  const ae=a1==null?Number.POSITIVE_INFINITY:a1;
+  const be=b1==null?Number.POSITIVE_INFINITY:b1;
+  return a0<be&&b0<ae;
+}
+/** True when stay occupies any part of the local calendar day [date 00:00, next 00:00). */
+function stayTouchesLocalDate(t,date){
+  const iv=occupancyInterval(t);
+  if(!iv)return false;
+  const dayStart=parseLocalDateTime(date,'00:00');
+  const dayEnd=parseLocalDateTime(addDays(date,1),'00:00');
+  if(!dayStart||!dayEnd)return false;
+  return intervalsOverlapMs(iv.startMs,iv.endMs,dayStart.getTime(),dayEnd.getTime());
+}
+/** Overnight / date-grid occupancy: half-open [check_in, reservedEnd) on DATE keys (checkout day free for next night). */
 function stayBlocksDate(t,date){
   if(isOperationallyClosed(t))return false;
   if(!t.check_in)return t.tenancy_type==='long_term'&&t.status==='active'&&!t.check_out&&!t.confirmed_until;
   const end=reservedEnd(t);
   return date>=t.check_in&&(!end||date<end);
 }
-/** True when room has no valid occupancy blocking this calendar date (same SoT as Availability). */
+/**
+ * Full-day green Available only when no valid stay touches that local date
+ * (includes morning-of-checkout / afternoon-of-check-in occupancy).
+ */
 function roomDateAvailable(roomId,date,ts){
   const list=ts||state.tenancies||[];
-  return !list.some(t=>Number(t.room_id)===Number(roomId)&&stayBlocksDate(t,date));
+  return !list.some(t=>Number(t.room_id)===Number(roomId)&&stayTouchesLocalDate(t,date));
 }
 function calendarStayChip(t,iso){
   const name=tenantBy(t.tenant_id)?.name||'Tenant';
@@ -3011,19 +3114,28 @@ function calendarStayChip(t,iso){
   const departure=effectiveOccupancyEnd(t)===iso;
   let cls=tenancyKind(t)==='upcoming'?'upcoming':'';
   if(departure&&!stayBlocksDate(t,iso))cls='depart';
-  const time=arrival&&t.check_in_time?` · in ${t.check_in_time.slice(0,5)}`:departure&&t.check_out_time?` · out ${t.check_out_time.slice(0,5)}`:'';
+  const time=arrival&&t.check_in_time?` · in ${normalizeClock(t.check_in_time).slice(0,5)}`:departure&&t.check_out_time?` · out ${normalizeClock(t.check_out_time).slice(0,5)}`:'';
   return `<div class="staychip ${cls}"><b>${esc(name)}</b>${esc(time)}</div>`;
 }
+/** Room conflict using canonical timestamp intervals when times exist; date half-open otherwise. */
 function roomOccupiedOverlap(roomId,start,end,opts={}){
   if(!roomId||!start)return false;
-  const endEx=end||'9999-12-31';
   const exclude=new Set((opts.excludeIds||[]).map(Number));
+  const startTime=opts.startTime||null;
+  const endTime=opts.endTime||null;
+  const reqStart=parseLocalDateTime(String(start).slice(0,10),startTime||(String(start).includes('T')?String(start).slice(11,16):'00:00'),'00:00');
+  const endDate=end?String(end).slice(0,10):null;
+  const reqEnd=endDate?parseLocalDateTime(endDate,endTime||(String(end).includes('T')?String(end).slice(11,16):'12:00'),'12:00'):null;
+  if(!reqStart)return false;
+  const reqStartMs=reqStart.getTime();
+  const reqEndMs=reqEnd?reqEnd.getTime():null;
   return state.tenancies.some(t=>{
     if(exclude.has(Number(t.id)))return false;
     if(Number(t.room_id)!==Number(roomId)||!t.check_in)return false;
     if(isOperationallyClosed(t))return false;
-    const tEnd=reservedEnd(t)||'9999-12-31';
-    return start<tEnd&&endEx>t.check_in;
+    const iv=occupancyInterval(t);
+    if(!iv)return false;
+    return intervalsOverlapMs(reqStartMs,reqEndMs,iv.startMs,iv.endMs);
   });
 }
 function roomAvailabilityNote(roomId,start,end,opts={}){
@@ -3055,12 +3167,12 @@ function viewingPeopleLabel(v){
 }
 function availabilityPage(){
   const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id))), ts=scopedTenancies().filter(t=>t.room_id===null||roomIds.has(Number(t.room_id)));
-  const start=new Date(today()+'T00:00:00'), end=new Date(start);end.setDate(end.getDate()+89);
+  const startIso=today(), endIso=addDays(startIso,89);
   const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
   const viewingLink=canEdit()?`<button type="button" class="btn ghost" id="goto-book-viewing">+ Book inspection</button>`:'';
   if(state.availabilityMode==='vacancy'){
-    const horizon=end.toISOString().slice(0,10);
+    const horizon=endIso;
     const cards=rooms.map(r=>{
       const all=ts.filter(t=>Number(t.room_id)===Number(r.id)&&t.check_in&&tenancyKind(t)!=='historical').sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''));
       const indefinite=all.find(t=>t.check_in<=today()&&!t.check_out&&!t.confirmed_until);
@@ -3077,13 +3189,13 @@ function availabilityPage(){
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
       <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
   }
-  // Room × date matrix — rooms in natural order; GREEN = roomDateAvailable via stayBlocksDate SoT.
+  // Room × date matrix — iso keys are property-local YYYY-MM-DD (never toISOString UTC).
   const dates=[];
   for(let i=0;i<90;i++){
-    const d=new Date(start);d.setDate(d.getDate()+i);
-    dates.push({iso:d.toISOString().slice(0,10),d,dow:(d.getDay()+6)%7});
+    const iso=addDays(startIso,i);
+    const d=parseLocalDateOnly(iso,12,0);
+    dates.push({iso,d,dow:(d.getDay()+6)%7});
   }
-  const colCount=1+dates.length;
   let matrix=`<div class="cal-cell head room">Room</div>`;
   dates.forEach(({iso,d,dow})=>{
     matrix+=`<div class="cal-cell head ${dow>=5?'weekend-col':''}"><div>${d.getDate()} ${d.toLocaleString('en-AU',{month:'short'})}</div><small class="muted">${weekdays[dow].slice(0,3)}</small></div>`;
@@ -3093,28 +3205,40 @@ function availabilityPage(){
     dates.forEach(({iso,dow})=>{
       const roomTs=ts.filter(t=>Number(t.room_id)===Number(r.id));
       const active=roomTs.filter(t=>stayBlocksDate(t,iso));
+      const arriving=roomTs.filter(t=>!isOperationallyClosed(t)&&t.check_in===iso);
       const departing=roomTs.filter(t=>{
         if(isOperationallyClosed(t))return false;
         const end=effectiveOccupancyEnd(t);
         return end===iso&&!active.some(a=>Number(a.id)===Number(t.id));
       });
+      const touching=roomTs.filter(t=>stayTouchesLocalDate(t,iso));
       const insp=scopedViewings().filter(v=>v.inspection_date===iso&&viewingKind(v)!=='past'&&viewingRoomIds(v).some(id=>Number(id)===Number(r.id)));
       const weekend=dow>=5?'weekend-col':'';
-      if(active.length){
-        const kind=active.some(t=>tenancyKind(t)==='upcoming')?'upcoming-cell':'occupied';
-        const chips=active.map(t=>calendarStayChip(t,iso)).join('')+(departing.length?departing.map(t=>calendarStayChip(t,iso)).join(''):'');
-        const inspHtml=insp.length?`<div class="staychip upcoming"><b>Insp</b> ${esc(insp[0].visitor_name||'Visitor')}</div>`:'';
-        matrix+=`<div class="cal-cell ${kind} ${weekend}">${chips}${inspHtml}</div>`;
+      const inspHtml=insp.length?`<div class="staychip upcoming"><b>Insp</b> ${esc(insp[0].visitor_name||'Visitor')}</div>`:'';
+      if(active.length||arriving.length){
+        const kind=(active.some(t=>tenancyKind(t)==='upcoming')||arriving.some(t=>tenancyKind(t)==='upcoming'))?'upcoming-cell':'occupied';
+        const chips=[...new Map([...active,...arriving,...departing].map(t=>[Number(t.id),t])).values()].map(t=>calendarStayChip(t,iso)).join('');
+        // Same-day turnover gap label when checkout then later check-in on this date.
+        let gap='';
+        if(departing.length&&arriving.length){
+          const outT=normalizeClock(departing[0].check_out_time,'12:00');
+          const inT=normalizeClock(arriving[0].check_in_time,'00:00');
+          if(outT<inT)gap=`<div class="cal-avail">Available ${esc(outT)}–${esc(inT)}</div>`;
+        }
+        matrix+=`<div class="cal-cell ${kind} ${weekend}">${chips}${gap}${inspHtml}</div>`;
+      }else if(departing.length||touching.length){
+        // Checkout day (or partial touch): do NOT label the whole date plain Available.
+        const chips=departing.map(t=>calendarStayChip(t,iso)).join('');
+        const outT=departing[0]?normalizeClock(departing[0].check_out_time,'12:00'):null;
+        const after=outT?`<div class="cal-avail">Available after ${esc(outT)}</div>`:`<span class="cal-avail">Available</span>`;
+        matrix+=`<div class="cal-cell available ${weekend}">${chips}${after}${inspHtml}</div>`;
       }else{
-        // Genuine free day for this room (half-open checkout already frees this date).
-        const turn=departing.map(t=>calendarStayChip(t,iso)).join('');
-        const inspHtml=insp.length?`<div class="staychip upcoming"><b>Insp</b> ${esc(insp[0].visitor_name||'Visitor')}</div>`:'';
-        matrix+=`<div class="cal-cell available ${weekend}"><span class="cal-avail">Available</span>${turn}${inspHtml}</div>`;
+        matrix+=`<div class="cal-cell available ${weekend}"><span class="cal-avail">Available</span>${inspHtml}</div>`;
       }
     });
   });
   const legend=`<div class="legend" style="margin-top:0"><span><i class="lg-available"></i>Available (green)</span><span><i class="lg-current"></i>Current / Occupied</span><span><i class="lg-upcoming"></i>Upcoming / Reserved</span><span><i class="lg-depart"></i>Check-out</span><span><i class="lg-insp"></i>Inspection</span></div>`;
-  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(today())} → ${fmtDate(end.toISOString().slice(0,10))} · rooms in natural order · green = available via stay occupancy SoT</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}${legend}</div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>90 Days Availability</h2><div class="muted small">${fmtDate(startIso)} → ${fmtDate(endIso)} · rooms in natural order · Brisbane-local dates · green = available via occupancy SoT</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}${legend}</div></div>
   <div class="cal-matrix-wrap"><div class="cal-matrix" style="grid-template-columns:88px repeat(${dates.length},minmax(68px,1fr))">${matrix}</div></div></section>`;
 }
 function viewingsPage(){
@@ -3265,9 +3389,10 @@ function incomeGroups(payments,mode){
 function incomePage(){
   const ts=scopedTenancies(), ids=new Set(ts.map(t=>Number(t.id)));
   const pays=state.payments.filter(p=>ids.has(Number(p.tenancy_id))&&String(p.status||'').toLowerCase()==='paid'&&p.received_date);
-  const now=new Date(today()+'T12:00:00'), dow=(now.getDay()+6)%7, w0=new Date(now); w0.setDate(now.getDate()-dow);
+  const now=parseLocalDateOnly(today(),12,0)||new Date(), dow=(now.getDay()+6)%7, w0=new Date(now); w0.setDate(now.getDate()-dow);
   const w1=new Date(w0); w1.setDate(w0.getDate()+6);
-  const ws=w0.toISOString().slice(0,10), we=w1.toISOString().slice(0,10), ym=today().slice(0,7), yr=today().slice(0,4);
+  const ymd=dt=>`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+  const ws=ymd(w0), we=ymd(w1), ym=today().slice(0,7), yr=today().slice(0,4);
   const total=pays.reduce((s,p)=>s+Number(p.amount||0),0);
   const week=pays.filter(p=>p.received_date>=ws&&p.received_date<=we).reduce((s,p)=>s+Number(p.amount||0),0);
   const month=pays.filter(p=>p.received_date.startsWith(ym)).reduce((s,p)=>s+Number(p.amount||0),0);
@@ -3375,11 +3500,11 @@ function render(){
       const overlaps=scopedTenancies().filter(t=>{
         if(isOperationallyClosed(t))return false;
         if(Number(t.room_id)!==Number(r.id)||!t.check_in)return false;
-        const s=t.check_in+'T'+(t.check_in_time||'00:00');
-        // checkout is exclusive for occupancy — use effective end (early termination)
-        const endDay=effectiveOccupancyEnd(t)||'9999-12-31';
-        const e=endDay+'T'+(t.check_out_time||'00:00');
-        return a<e && b>s;
+        const iv=occupancyInterval(t);
+        if(!iv)return false;
+        const reqStart=new Date(a).getTime();
+        const reqEnd=new Date(b).getTime();
+        return intervalsOverlapMs(reqStart,reqEnd,iv.startMs,iv.endMs);
       });
       if(!overlaps.length)fully.push(r);
       else if(overlaps.every(t=>{
@@ -3875,7 +4000,11 @@ function planBookingAllocationsEdit(anchor,proposed,opts={}){
   const excludeIds=[...new Set([...(opts.excludeIds||[]),...existingIds,Number(anchor.id)].filter(Boolean))];
   for(let i=0;i<live.length;i++){
     const s=live[i];
-    if(roomOccupiedOverlap(s.room_id,s.check_in,s.check_out||null,{excludeIds})){
+    if(roomOccupiedOverlap(s.room_id,s.check_in,s.check_out||null,{
+      excludeIds,
+      startTime:s.check_in_time||null,
+      endTime:s.check_out_time||null
+    })){
       return{
         ok:false,
         error:roomAvailabilityNote(s.room_id,s.check_in,s.check_out||null,{excludeIds}),

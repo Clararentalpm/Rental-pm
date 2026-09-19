@@ -253,6 +253,7 @@ check('TEST 8 Split stay — each room only its allocation', () => {
     room_id: 102,
     check_in: '2026-09-13',
     check_out: '2026-09-16',
+    check_out_time: '12:00',
     status: 'active',
     notes: `BOOKING_GROUP:${gid}\nSEGMENT_INDEX:1`,
   };
@@ -261,16 +262,18 @@ check('TEST 8 Split stay — each room only its allocation', () => {
     tenant_id: 3,
     room_id: 104,
     check_in: '2026-09-16',
+    check_in_time: '14:00',
     check_out: '2026-09-20',
     status: 'upcoming',
     notes: `BOOKING_GROUP:${gid}\nSEGMENT_INDEX:2`,
   };
   const ts = [a, b];
   assert(sandbox.roomDateAvailable(102, '2026-09-14', ts) === false, 'R2 occupied 14');
-  assert(sandbox.roomDateAvailable(102, '2026-09-16', ts) === true, 'R2 free at handoff (half-open)');
+  assert(sandbox.stayBlocksDate(a, '2026-09-16') === false, 'R2 overnight free at handoff (half-open)');
+  assert(sandbox.stayTouchesLocalDate(a, '2026-09-16') === true, 'R2 still touches morning of checkout');
   assert(sandbox.roomDateAvailable(104, '2026-09-14', ts) === true, 'R4 free before');
   assert(sandbox.roomDateAvailable(104, '2026-09-16', ts) === false, 'R4 occupied 16');
-  assert(sandbox.roomDateAvailable(104, '2026-09-20', ts) === true, 'R4 free at final out');
+  assert(sandbox.stayBlocksDate(b, '2026-09-20') === false, 'R4 overnight free at final out');
 });
 
 check('TEST 9 Checkout day available for next check-in (half-open)', () => {
@@ -293,10 +296,20 @@ check('TEST 9 Checkout day available for next check-in (half-open)', () => {
     check_out: '2026-09-20',
     status: 'upcoming',
   };
-  assert(sandbox.stayBlocksDate(out, '2026-09-16') === false, 'checkout exclusive');
+  assert(sandbox.stayBlocksDate(out, '2026-09-16') === false, 'checkout exclusive overnight');
   assert(sandbox.stayBlocksDate(inn, '2026-09-16') === true, 'new guest occupies');
   assert(sandbox.roomDateAvailable(105, '2026-09-16', [out, inn]) === false, 'no false vacancy');
-  assert(sandbox.roomDateAvailable(105, '2026-09-16', [out]) === true, 'turnover vacancy if no arrival');
+  // Checkout morning still touches the date — not plain full-day Available; gap after 12:00 is free for booking.
+  assert(sandbox.stayTouchesLocalDate(out, '2026-09-16') === true, 'departing touches checkout morning');
+  sandbox.state.tenancies = [out];
+  assert(
+    sandbox.roomOccupiedOverlap(105, '2026-09-16', '2026-09-16', {
+      startTime: '12:30',
+      endTime: '14:30',
+      excludeIds: [],
+    }) === false,
+    'turnover gap free when no arrival yet'
+  );
 });
 
 check('availabilityPage renders rooms in natural order with Available', () => {

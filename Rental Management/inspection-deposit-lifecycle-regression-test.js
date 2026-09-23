@@ -146,7 +146,7 @@ function seed() {
     activity: [],
     priceHistory: [],
     page: 'overview',
-    bondFilter: 'current',
+    bondFilter: 'open',
   });
 }
 
@@ -458,7 +458,8 @@ check('TEST 7 BOOKING_GROUP split stay segments block correct rooms/dates', () =
   assert(sandbox.stayBlocksDate(sandbox.state.tenancies[0], '2026-09-22') === false, 'room2 free at handover');
   assert(sandbox.stayBlocksDate(sandbox.state.tenancies[1], '2026-09-22') === true, 'room5 blocked');
   assert(sandbox.roomOccupiedOverlap(12, '2026-09-20', '2026-09-22') === true, 'overlap room2');
-  assert(sandbox.roomOccupiedOverlap(15, '2026-09-20', '2026-09-22') === false, 'no overlap room5 early');
+  // Half-open date request: end at 00:00 on handover day (same as overnight model) — Room 5 starts that morning.
+  assert(sandbox.roomOccupiedOverlap(15, '2026-09-20', '2026-09-22', { endTime: '00:00' }) === false, 'no overlap room5 early');
 });
 
 // ——— TEST 8 ———
@@ -486,7 +487,7 @@ check('TEST 8 active bond → current bucket', () => {
     forfeited_amount: 0,
   };
   assert(sandbox.bondIsFinanciallyFinalised(b) === false, 'not finalised');
-  assert(sandbox.bondBucket(b) === 'current', 'current bucket');
+  assert(sandbox.bondBucket(b) === 'open', 'open bucket');
 });
 
 // ——— TEST 9 ———
@@ -514,7 +515,7 @@ check('TEST 9 past stay + refund pending → current', () => {
     forfeited_amount: 0,
   };
   assert(sandbox.tenancyKind(sandbox.state.tenancies[0]) === 'historical', 'stay past');
-  assert(sandbox.bondBucket(b) === 'current', 'refund pending stays current');
+  assert(sandbox.bondBucket(b) === 'open', 'refund pending stays open');
 });
 
 // ——— TEST 10 ———
@@ -542,7 +543,7 @@ check('TEST 10 past stay + fully refunded → past', () => {
     forfeited_amount: 0,
   };
   assert(sandbox.bondIsFinanciallyFinalised(b) === true, 'finalised');
-  assert(sandbox.bondBucket(b) === 'past', 'past bucket');
+  assert(sandbox.bondBucket(b) === 'closed', 'closed bucket');
 });
 
 // ——— TEST 11 ———
@@ -570,7 +571,7 @@ check('TEST 11 past stay + finalised partial → past', () => {
     forfeited_amount: 200,
   };
   assert(sandbox.bondIsFinanciallyFinalised(b) === true, 'partial finalised');
-  assert(sandbox.bondBucket(b) === 'past', 'past');
+  assert(sandbox.bondBucket(b) === 'closed', 'past');
 });
 
 // ——— TEST 12 ———
@@ -597,7 +598,7 @@ check('TEST 12 cancelled + unresolved → current', () => {
     refund_amount: 0,
     forfeited_amount: 0,
   };
-  assert(sandbox.bondBucket(b) === 'current', 'unresolved cancelled bond stays current');
+  assert(sandbox.bondBucket(b) === 'open', 'unresolved cancelled bond stays open');
 });
 
 // ——— TEST 13 ———
@@ -626,7 +627,7 @@ check('TEST 13 cancelled + finalised → past', () => {
     forfeited_amount: 200,
   };
   assert(sandbox.bondIsFinanciallyFinalised(b) === true, 'forfeit finalised');
-  assert(sandbox.bondBucket(b) === 'past', 'past after forfeit');
+  assert(sandbox.bondBucket(b) === 'closed', 'closed after forfeit');
 });
 
 check('badges / lifecycle helpers smoke', () => {

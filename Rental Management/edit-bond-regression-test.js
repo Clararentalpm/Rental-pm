@@ -186,7 +186,7 @@ check('TEST 1 Record $500 → Edit to $550 → one bond, amount 550', () => {
   Object.assign(sandbox.state.bonds[0], plan.patch);
   assert(sandbox.state.bonds.length === 1, 'still one bond');
   assert(sandbox.bondRemaining(sandbox.state.bonds[0]) === 550, 'remaining display 550');
-  assert(sandbox.bondBucket(sandbox.state.bonds[0]) === 'current', 'stays current');
+  assert(sandbox.bondBucket(sandbox.state.bonds[0]) === 'open', 'stays open');
 });
 
 check('TEST 2 Edit payment method / date / reference updates same record', () => {
@@ -260,7 +260,7 @@ check('TEST 7 Edit does not invent duplicate bond/tenant/stay', () => {
   assert(sandbox.state.bonds.length === before.bonds, 'no new bond');
   assert(sandbox.state.tenants.length === before.tenants, 'no new tenant');
   assert(sandbox.state.tenancies.length === before.tenancies, 'no new stay');
-  assert(sandbox.bondBucket(sandbox.state.bonds[0]) === 'current', 'bucket unchanged');
+  assert(sandbox.bondBucket(sandbox.state.bonds[0]) === 'open', 'bucket unchanged');
 });
 
 check('Full forfeit: cannot reduce below forfeited', () => {

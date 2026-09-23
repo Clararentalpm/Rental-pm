@@ -404,7 +404,7 @@ check('UI Room Status: Laura once, Vacant semantics, clean rate, no past Aura', 
   assert((cur5.match(/Laura/g) || []).length === 1, `Laura count in current: ${cur5}`);
   assert(/\$35\s*\/\s*night/.test(card5), `rate line: ${card5}`);
   assert(!/\$40/.test(cur5) && !/\$30/.test(cur5), 'historical/cancelled rates leaked');
-  assert(/Vacant now/.test(card1), 'vacant now missing on empty room');
+  assert(/AVAILABLE \/ VACANT|Vacant now/i.test(card1), 'vacant label missing on empty room');
   assert(!/Aura/.test(card2.split(/Next:/)[0]), 'past Aura on Room 2 current');
   assert(/辣豆/.test(card2) && /Vicky/.test(card2), 'shared current occupants');
   assert(/Blackgun/.test(card6.split(/Next:/)[0]), 'sofa current');

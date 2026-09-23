@@ -322,6 +322,20 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   </div>
 </form></dialog>
 
+<dialog id="delete-stay-dialog"><form id="delete-stay-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Delete stay</h2><div class="muted small">Administrative correction for true duplicates / mistakes — not the same as Cancel booking.</div></div><button type="button" class="close" data-close="delete-stay-dialog">×</button></div>
+  <input type="hidden" name="tenancy_id">
+  <div id="delete-stay-summary" style="margin-top:14px"></div>
+  <div id="delete-stay-warning" class="note" style="margin-top:12px"></div>
+  <div id="delete-stay-error" class="error hidden"></div>
+  <label style="margin-top:12px" id="delete-stay-reason-wrap">Reason / note<textarea name="reason" rows="2" placeholder="Why is this stay being removed?"></textarea></label>
+  <label style="margin-top:10px;display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="confirm_delete" style="width:auto;margin-top:3px" required> I understand this is a permanent administrative correction (or void that removes the stay from operational views).</label>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" data-close="delete-stay-dialog">Back</button>
+    <button type="submit" class="btn danger" id="delete-stay-confirm-btn">Confirm delete / void</button>
+  </div>
+</form></dialog>
+
 <dialog id="cancel-booking-dialog"><form id="cancel-booking-form" class="dialog-body">
   <div class="dialog-head"><div><h2>Cancel booking</h2><div id="cancel-booking-name" class="muted small"></div></div><button type="button" class="close" data-close="cancel-booking-dialog">×</button></div>
   <input type="hidden" name="tenancy_id">
@@ -515,7 +529,7 @@ const fmtDate=v=>{
   return new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(d);
 };
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
-let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'current',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property'};
+let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'open',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property',paymentSearch:'',paymentFilterTenant:'',paymentFilterRoom:'',paymentFilterMethod:'',paymentFilterStatus:'all',paymentFilterFrom:'',paymentFilterTo:''};
 
 function getSession(){try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch{return null}}
 function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
@@ -583,14 +597,78 @@ function compareRoomsNatural(a,b){
 function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort(compareRoomsNatural)}
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
-function scopedTenancies(){const ids=new Set(currentPropertyRooms().map(r=>Number(r.id)));return state.tenancies.filter(t=>t.room_id===null||ids.has(Number(t.room_id)))}
-function isStayOnProperty(t,propertyId=state.propertyId){
-  if(!t||t.room_id===null||t.room_id===undefined)return false;
+/**
+ * Stable property for a stay: room.property_id (source of truth).
+ * Never infer property from room-name text. Unassigned room_id ⇒ not on any property tab.
+ */
+function stayPropertyId(t){
+  if(!t)return null;
+  if(t.property_id!=null&&t.property_id!==''){
+    const explicit=Number(t.property_id);
+    if(Number.isFinite(explicit)){
+      const r=t.room_id!=null?roomBy(t.room_id):null;
+      // Prefer room FK when both exist and disagree — room is physical SoT; flag via audit helper.
+      if(r&&Number(r.property_id)!==explicit)return Number(r.property_id);
+      return explicit;
+    }
+  }
+  if(t.room_id===null||t.room_id===undefined||t.room_id==='')return null;
   const r=roomBy(t.room_id);
-  return !!r&&Number(r.property_id)===Number(propertyId);
+  return r?Number(r.property_id):null;
+}
+function isStayOnProperty(t,propertyId=state.propertyId){
+  const pid=stayPropertyId(t);
+  return pid!=null&&Number(pid)===Number(propertyId);
+}
+/** Property-scoped stays only — never include null-room rows on every tab (cross-property leak). */
+function scopedTenancies(propertyId=state.propertyId){
+  return (state.tenancies||[]).filter(t=>isStayOnProperty(t,propertyId));
 }
 function tenantStaysOnProperty(tenantId,propertyId=state.propertyId){
   return state.tenancies.filter(x=>Number(x.tenant_id)===Number(tenantId)&&isStayOnProperty(x,propertyId));
+}
+function scopedBonds(propertyId=state.propertyId){
+  const ids=new Set(scopedTenancies(propertyId).map(t=>Number(t.id)));
+  return (state.bonds||[]).filter(b=>ids.has(Number(b.tenancy_id)));
+}
+function scopedPayments(propertyId=state.propertyId){
+  const ids=new Set(scopedTenancies(propertyId).map(t=>Number(t.id)));
+  return (state.payments||[]).filter(p=>ids.has(Number(p.tenancy_id)));
+}
+/**
+ * Read-only integrity scan — never mutates production data.
+ * Returns rows where tenancy.property_id disagrees with room.property_id, or room is missing.
+ */
+function crossPropertyIntegrityReport(){
+  const issues=[];
+  (state.tenancies||[]).forEach(t=>{
+    if(t.room_id==null||t.room_id===undefined||t.room_id===''){
+      issues.push({kind:'unassigned_room',tenancyId:t.id,tenantId:t.tenant_id,detail:'tenancy has no room_id'});
+      return;
+    }
+    const r=roomBy(t.room_id);
+    if(!r){
+      issues.push({kind:'missing_room',tenancyId:t.id,tenantId:t.tenant_id,roomId:t.room_id,detail:'room_id not found'});
+      return;
+    }
+    if(t.property_id!=null&&t.property_id!==''&&Number(t.property_id)!==Number(r.property_id)){
+      issues.push({
+        kind:'property_mismatch',
+        tenancyId:t.id,
+        tenantId:t.tenant_id,
+        roomId:t.room_id,
+        tenancyPropertyId:Number(t.property_id),
+        roomPropertyId:Number(r.property_id),
+        detail:'tenancy.property_id ≠ room.property_id'
+      });
+    }
+  });
+  (state.bonds||[]).forEach(b=>{
+    const t=(state.tenancies||[]).find(x=>Number(x.id)===Number(b.tenancy_id));
+    if(!t){issues.push({kind:'bond_orphan',bondId:b.id,tenancyId:b.tenancy_id,detail:'bond tenancy missing'});return}
+    if(stayPropertyId(t)==null)issues.push({kind:'bond_unscoped',bondId:b.id,tenancyId:t.id,detail:'bond stay has no property'});
+  });
+  return issues;
 }
 /*
  * Shared payment-group rules (owner-confirmed 2026-09-08):
@@ -618,14 +696,23 @@ function effectiveOccupancyEnd(t){
   return occupancyEndDate(t);
 }
 /**
- * Closed for current/future operational use (Availability, Current, Departures).
+ * Closed for current/future operational use (Availability, Current, Calendar, Departures).
  * Historical rows are retained for audit but must not occupy rooms or inflate departures.
+ * Includes admin-voided duplicates (financial history preserved).
  */
+function isAdminVoided(t){
+  if(!t)return true;
+  const st=normalizeBookingStatus(t);
+  if(['void','voided','admin_void','deleted','superseded'].includes(st))return true;
+  const marker=parseNoteMarker(t.notes,'ADMIN_VOID');
+  return marker!=null&&marker!==''&&marker!=='0'&&String(marker).toLowerCase()!=='false';
+}
 function isOperationallyClosed(t){
   if(!t)return true;
   if(isCancelledOrNoShow(t))return true;
+  if(isAdminVoided(t))return true;
   const st=normalizeBookingStatus(t);
-  return ['historical','ended','inactive','completed','deleted','superseded'].includes(st);
+  return ['historical','ended','inactive','completed','deleted','superseded','void','voided','admin_void'].includes(st);
 }
 /** True when local now has reached this stay's check-in date+time (Brisbane wall clock). */
 function hasReachedCheckIn(t,onDate=today(),onTime=null){
@@ -640,6 +727,8 @@ function hasReachedCheckIn(t,onDate=today(),onTime=null){
 function isCurrentOccupancyStay(t,onDate=today()){
   if(!t||!t.check_in)return false;
   if(isOperationallyClosed(t))return false;
+  // Date-derived: past effective end is never current — even if stored status is still "active"/"current".
+  if(tenancyKind(t,onDate)!=='current')return false;
   if(t.check_in>onDate)return false;
   const end=effectiveOccupancyEnd(t);
   if(end&&end<=onDate)return false;
@@ -650,21 +739,84 @@ function isCurrentOccupancyStay(t,onDate=today()){
 function isUpcomingOccupancyStay(t,onDate=today()){
   if(!t||!t.check_in)return false;
   if(isOperationallyClosed(t))return false;
+  if(tenancyKind(t,onDate)!=='upcoming')return false;
   if(t.check_in>onDate)return true;
   // Same day, not yet at check-in time.
   if(t.check_in===onDate&&!hasReachedCheckIn(t,onDate))return true;
   return false;
 }
+/**
+ * Valid operational allocations for a room — property-scoped, not closed, date-valid.
+ * Used by Room Status / Calendar / Availability (same SoT).
+ * Dedupes same tenant + same check-in (duplicate erroneous rows) by lowest tenancy id.
+ */
+function operationalAllocationsForRoom(roomId,onDate=today()){
+  const rows=scopedTenancies().filter(t=>Number(t.room_id)===Number(roomId)&&!isOperationallyClosed(t)&&t.check_in);
+  const byKey=new Map();
+  rows.forEach(t=>{
+    const key=`${Number(t.tenant_id)}|${t.check_in}|${Number(t.room_id)}`;
+    const prev=byKey.get(key);
+    if(!prev||Number(t.id)<Number(prev.id))byKey.set(key,t);
+  });
+  return [...byKey.values()];
+}
 function currentOccupantsForRoom(roomId,onDate=today()){
-  return scopedTenancies().filter(t=>Number(t.room_id)===Number(roomId)&&isCurrentOccupancyStay(t,onDate));
+  const rows=operationalAllocationsForRoom(roomId,onDate).filter(t=>isCurrentOccupancyStay(t,onDate));
+  // One line per tenant — never pile historical/upcoming/duplicate names into Current.
+  const byTenant=new Map();
+  rows.forEach(t=>{
+    const k=Number(t.tenant_id);
+    const prev=byTenant.get(k);
+    if(!prev||Number(t.id)<Number(prev.id))byTenant.set(k,t);
+  });
+  return [...byTenant.values()];
 }
 function nextBookingForRoom(roomId,onDate=today()){
-  return scopedTenancies()
-    .filter(t=>Number(t.room_id)===Number(roomId)&&isUpcomingOccupancyStay(t,onDate))
-    .sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''))[0]||null;
+  return operationalAllocationsForRoom(roomId,onDate)
+    .filter(t=>isUpcomingOccupancyStay(t,onDate))
+    .sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')||Number(a.id)-Number(b.id))[0]||null;
 }
 function stayActiveOn(t,onDate=today()){
   return isCurrentOccupancyStay(t,onDate);
+}
+/** Dedupe duplicate erroneous stay rows for Calendar/Availability chips (by tenant+room+dates, keep lowest id). */
+function dedupeRoomStayRows(rows){
+  const byKey=new Map();
+  (rows||[]).forEach(t=>{
+    if(!t)return;
+    const key=`${Number(t.tenant_id)}|${Number(t.room_id)}|${t.check_in||''}|${effectiveOccupancyEnd(t)||''}`;
+    const prev=byKey.get(key);
+    if(!prev||Number(t.id)<Number(prev.id))byKey.set(key,t);
+  });
+  return [...byKey.values()];
+}
+/**
+ * Classify stay rows for audit (read-only). Never mutates data.
+ * kinds: canonical_valid | split_allocation | historical | cancelled | duplicate_erroneous | inspection_origin | admin_void
+ */
+function classifyStayRecord(t){
+  if(!t)return {kind:'unknown',safeDeleteCandidate:false};
+  if(isAdminVoided(t))return {kind:'admin_void',safeDeleteCandidate:false,tenancyId:t.id};
+  if(isCancelledOrNoShow(t))return {kind:'cancelled',safeDeleteCandidate:false,tenancyId:t.id};
+  if(tenancyKind(t)==='historical')return {kind:'historical',safeDeleteCandidate:false,tenancyId:t.id};
+  if(bookingGroupId(t)&&!isBookingGroupPrimary(t))return {kind:'split_allocation',safeDeleteCandidate:false,tenancyId:t.id};
+  const src=parseNoteMarker(t.notes,'SOURCE');
+  const blockers=tenancyDeleteBlockers(t.id);
+  const same=state.tenancies.filter(x=>
+    Number(x.tenant_id)===Number(t.tenant_id)
+    &&Number(x.room_id)===Number(t.room_id)
+    &&x.check_in===t.check_in
+    &&(effectiveOccupancyEnd(x)||null)===(effectiveOccupancyEnd(t)||null)
+    &&!isOperationallyClosed(x)
+  );
+  if(same.length>1){
+    const canonical=same.slice().sort((a,b)=>Number(a.id)-Number(b.id))[0];
+    if(Number(canonical.id)!==Number(t.id)){
+      return {kind:'duplicate_erroneous',safeDeleteCandidate:blockers.length===0,tenancyId:t.id,canonicalId:canonical.id,blockers};
+    }
+  }
+  if(src==='inspection_deposit')return {kind:'inspection_origin',safeDeleteCandidate:false,tenancyId:t.id};
+  return {kind:'canonical_valid',safeDeleteCandidate:false,tenancyId:t.id};
 }
 /** Note marker helpers (no schema change — encode multi-room / multi-segment in notes). */
 function parseNoteMarker(notes,key){
@@ -833,15 +985,43 @@ function bondIsFinanciallyFinalised(b){
   const amt=Number(b.amount||0);
   if(amt>0&&bondForfeited(b)+0.009>=amt&&(rem==null||rem<=0))return true;
   if(amt>0&&bondRefundedTotal(b)+0.009>=amt&&(rem==null||rem<=0))return true;
+  if(rem!=null&&rem<=0&&bondCommittedOutflows(b)>0)return true;
   return false;
 }
+/** OPEN = money still held (remaining > 0, not fully finalised). CLOSED = fully refunded/deducted/forfeited. */
+function bondIsOpen(b){
+  if(!b)return false;
+  if(bondIsFinanciallyFinalised(b))return false;
+  const rem=bondRemaining(b);
+  return rem==null||rem>0;
+}
 function bondBucket(b){
-  if(!b)return 'current';
-  const t=(state.tenancies||[]).find(x=>Number(x.id)===Number(b.tenancy_id));
-  const stayPast=!t||isCancelledOrNoShow(t)||tenancyKind(t)==='historical'
-    ||['completed','ended','inactive','historical'].includes(String(t?.status||'').toLowerCase());
-  if(stayPast&&bondIsFinanciallyFinalised(b))return 'past';
-  return 'current';
+  if(!b)return 'closed';
+  return bondIsOpen(b)?'open':'closed';
+}
+/** Overview / Bond page share this helper — open bonds only, property-scoped. */
+function openBondsForProperty(propertyId=state.propertyId){
+  return scopedBonds(propertyId).filter(bondIsOpen);
+}
+/** Bonds with remaining held and stay ending within horizon (refund watch). */
+function bondsOnRefundWatch(horizonDays=7,propertyId=state.propertyId){
+  const horizon=addDays(today(),horizonDays);
+  return openBondsForProperty(propertyId).filter(b=>{
+    if(bondForfeited(b)>0&&bondRemaining(b)<=0)return false;
+    const ten=(state.tenancies||[]).find(x=>Number(x.id)===Number(b.tenancy_id));
+    if(!ten||isOperationallyClosed(ten))return false;
+    const d=effectiveOccupancyEnd(ten);
+    return !!(d&&d<=horizon);
+  });
+}
+/** Sum open bond remaining by currency — never mix AUD+CNY. */
+function openBondTotalsByCurrency(propertyId=state.propertyId){
+  const totals={AUD:0,CNY:0};
+  openBondsForProperty(propertyId).forEach(b=>{
+    const cur=b.original_currency==='CNY'?'CNY':'AUD';
+    totals[cur]+=Number(bondRemaining(b)||0);
+  });
+  return totals;
 }
 /**
  * Pure plan for Inspection → Deposit Paid → Payment Action → Confirmed Stay.
@@ -1597,6 +1777,8 @@ function nextRentDue(t){
     return t.check_in; // pay by arrival / stay start (instalments keep this due anchor)
   }
   if(t.status==='upcoming'&&t.check_in>today())return t.check_in;
+  // Date-derived upcoming (do not trust stale stored status alone).
+  if(tenancyKind(t)==='upcoming'&&t.check_in&&t.check_in>today())return t.check_in;
   const through=paidThrough(t);
   if(through)return addDays(through,1);
   return t.check_in;
@@ -2687,7 +2869,30 @@ function renderChrome(){
   const tabs=state.properties.map(p=>`<button class="tab ${Number(p.id)===Number(state.propertyId)?'active':''}" data-prop="${p.id}">${esc(p.name)}</button>`).join('');
   const add=canEdit()?`<button type="button" class="tab" id="add-property-tab">+ Property</button>`:'';
   $('#property-tabs').innerHTML=tabs+add;
-  $$('#property-tabs [data-prop]').forEach(b=>b.onclick=()=>{state.propertyId=Number(b.dataset.prop);renderChrome();render()});
+  $$('#property-tabs [data-prop]').forEach(b=>b.onclick=()=>{
+    const next=Number(b.dataset.prop);
+    if(Number(state.propertyId)===next)return;
+    state.propertyId=next;
+    // Clear prior-property UI filters so McGregor→Carindale cannot leave stale state.
+    state.tenantSearch='';
+    state.tenantFilter='current';
+    state.view='current';
+    state.bondFilter='open';
+    state.scheduleSearch='';
+    state.scheduleStatus='all';
+    state.scheduleType='all';
+    state.scheduleDueFrom='';
+    state.scheduleDueTo='';
+    state.paymentSearch='';
+    state.paymentFilterTenant='';
+    state.paymentFilterRoom='';
+    state.paymentFilterMethod='';
+    state.paymentFilterStatus='all';
+    state.paymentFilterFrom='';
+    state.paymentFilterTo='';
+    state.actionFilter='open';
+    renderChrome();render();
+  });
   const ap=$('#add-property-tab');if(ap)ap.onclick=()=>openAddProperty();
 }
 function setPage(p){
@@ -2830,18 +3035,24 @@ function tenancyDeleteBlockers(tenancyId){
 
 
 function overviewPage(){
-  const rooms=currentPropertyRooms(), ts=scopedTenancies(), current=ts.filter(t=>tenancyKind(t)==='current'), upcoming=ts.filter(t=>tenancyKind(t)==='upcoming');
+  const rooms=currentPropertyRooms(), ts=scopedTenancies();
+  // Prefer booking-level classification for Current/Upcoming counts; segment table still uses tenancyKind.
+  const current=ts.filter(t=>tenancyKind(t)==='current'&&(!bookingGroupId(t)||isBookingGroupPrimary(t)||isCurrentOccupancyStay(t)));
+  const upcoming=ts.filter(t=>tenancyKind(t)==='upcoming'&&(!bookingGroupId(t)||isBookingGroupPrimary(t)||isUpcomingOccupancyStay(t)));
+  const currentRows=ts.filter(t=>tenancyKind(t)==='current');
+  const upcomingRows=ts.filter(t=>tenancyKind(t)==='upcoming');
+  const historicalRows=ts.filter(t=>tenancyKind(t)==='historical');
   const now=new Date(today()+'T12:00:00');
   const monthEndDate=new Date(now.getFullYear(),now.getMonth()+1,0);
-  const openBonds=state.bonds.filter(b=>b.received&&!b.refunded&&ts.some(x=>x.id===b.tenancy_id)).length;
+  const openBondRows=openBondsForProperty();
+  const openBonds=openBondRows.length;
+  const openBondTotals=openBondTotalsByCurrency();
+  const openBondTotalLabel=[openBondTotals.AUD>0?money(openBondTotals.AUD,'AUD'):null,openBondTotals.CNY>0?money(openBondTotals.CNY,'CNY'):null].filter(Boolean).join(' · ')||'—';
   const horizon=addDays(today(),7);
   const arrivals=upcomingArrivals(7);
   const departures=upcomingDepartures(7);
   const overdue=displayPaymentActions('overdue');
-  const bondsToRefund=state.bonds.filter(b=>{
-    const ten=state.tenancies.find(x=>x.id===b.tenancy_id),d=ten?.check_out||ten?.confirmed_until;
-    return b.received&&!b.refunded&&bondForfeited(b)<=0&&d&&d<=horizon;
-  });
+  const bondsToRefund=bondsOnRefundWatch(7);
   const wb=weekBounds();
   const rentRoll=contractedWeeklyRentRoll();
   const actualWeek=actualRentalIncomeInRange(wb.start,wb.end);
@@ -2882,17 +3093,29 @@ function overviewPage(){
         return `${money(t.rent_amount)} / ${esc(rateUnitLabel(t.rent_period)||t.rent_period||'period')}`;
       }).join('<br>');
     })();
+    const checkoutLine=cur.length?cur.map(t=>{
+      const end=effectiveOccupancyEnd(t);
+      if(!end)return '';
+      const tm=t.check_out_time?` ${normalizeClock(t.check_out_time).slice(0,5)}`:'';
+      return `Checkout: ${fmtDate(end)}${tm}`;
+    }).filter(Boolean).join('<br>'):'';
     const occupantLabel=cur.length
       ?cur.map(t=>esc(tenantBy(t.tenant_id)?.name||'Tenant')).join(' + ')
-      :'<span class="muted">Vacant now</span>';
+      :'<span class="muted">AVAILABLE / VACANT</span>';
+    const nextLine=next
+      ?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}${next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:''}<div class="muted small">Upcoming booking</div></div>`
+      :'';
     return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+      <div class="muted small">${cur.length?'Current occupant':'Status'}</div>
       <div class="occupant">${occupantLabel}</div>
       <div class="subline">${rentLine}</div>
-      ${next?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}<div class="muted small">Confirmed · upcoming</div></div>`:''}
+      ${checkoutLine?`<div class="subline muted small">${checkoutLine}</div>`:''}
+      ${nextLine}
       <div class="nextline"><b>Asking:</b> ${money(rp.current_asking_price)} &nbsp; <b>Standard:</b> ${money(rp.standard_price)}</div>
       ${canEdit()?`<div class="room-actions"><button class="btn ghost edit-room" data-room="${r.id}">Edit room</button></div>`:''}
     </article>`;
   }).join('');
+  const viewRows=state.view==='current'?currentRows:state.view==='upcoming'?upcomingRows:historicalRows;
   return `<div class="metrics">
     <div class="metric" style="border-top:4px solid var(--accent)" title="Count of rooms on the current property tab."><span>Rooms ${tip('Count of rooms on the current property tab.')}</span><strong>${rooms.length}</strong><small>${current.length} current tenancies</small></div>
     <div class="metric" style="border-top:4px solid var(--green)" title="Weekly equivalent of active rental agreements. Not cash received."><span>Contracted weekly rent roll ${tip('Weekly equivalent of active rental agreements. This is NOT actual cash received.')}</span><strong>${money(rentRoll)}</strong><small>active obligations · not cash</small></div>
@@ -2905,16 +3128,16 @@ function overviewPage(){
     <div class="metric" style="border-top:4px solid var(--amber)" title="Forward booked occupancy for the next 30/60/90 days."><span>Forward booked occupancy ${tip('Occupied room-days ÷ available room-days for the next 30 / 60 / 90 days.')}</span><strong>${Math.round(fwd30.occupancyPct*100)}% / ${Math.round(fwd60.occupancyPct*100)}% / ${Math.round(fwd90.occupancyPct*100)}%</strong><small>30 / 60 / 90 days · <span class="${demand.cls}">${demand.label}</span></small></div>
     <div class="metric" style="border-top:4px solid var(--amber)" title="Vacant room-days and vacancy percentage for the next 30 days."><span>Vacancy · next 30 days ${tip('Vacant room-days and vacancy % over the next 30 days.')}</span><strong>${fwd30.vacant} days</strong><small>${Math.round(fwd30.vacancyPct*100)}% vacant</small></div>
     <div class="metric" style="border-top:4px solid var(--accent)" title="Actual monthly rental income divided by available room-days this month."><span>RevPAR · this month ${tip('Revenue per available room: actual monthly rental income ÷ available room-days this month.')}</span><strong>${money(revpar)}</strong><small>income ÷ available room-days</small></div>
-    <div class="metric" style="border-top:4px solid var(--amber)" title="Bonds/deposits received and not yet refunded."><span>Open bonds ${tip('Bonds/deposits received and not yet refunded.')}</span><strong>${openBonds}</strong><small>received, not refunded</small></div>
+    <div class="metric" style="border-top:4px solid var(--amber)" title="Open bonds: remaining held &gt; 0, not fully refunded/forfeited. Currencies listed separately."><span>Open bonds ${tip('Bonds/deposits with remaining money still held (same Open classification as Bond page). AUD and CNY are never summed together.')}</span><strong>${openBonds}</strong><small>${esc(openBondTotalLabel)}</small></div>
   </div>
   <div class="alert-grid">
     <div class="alert-card"><span class="muted small">Arrivals · next 7 days</span><strong>${arrivals.length}</strong><div class="small">${arrivals.map(t=>`${fmtDate(t.check_in)} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Departures · next 7 days</span><strong>${departures.length}</strong><div class="small">${departures.map(t=>`${fmtDate(effectiveOccupancyEnd(t))} ${esc(tenantBy(t.tenant_id)?.name||'')}`).join('<br>')||'None'}</div></div>
     <div class="alert-card"><span class="muted small">Payment overdue</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(a=>{const ten=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));return `${esc(ten?paymentGroupName(ten):(tenantBy(a.tenant_id)?.name||'Action'))} · ${esc(paymentActionLiveStatus(a))}`}).join('<br>')||'None — cancelled/waived/superseded excluded'}</div></div>
-    <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const ten=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(ten?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None'}</div></div>
+    <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const ten=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(ten?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None — open bonds only'}</div></div>
   </div>
-  <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current property only · auto-refreshes after edits</span></div><div class="room-grid">${cards}</div></section>
-  <section class="panel"><div class="panel-head"><h2>Current & upcoming stays</h2><div class="seg">${['current','upcoming','historical'].map(v=>`<button class="${state.view===v?'active':''}" data-view="${v}">${v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div></div>${tenancyTable(ts.filter(t=>tenancyKind(t)===state.view),true)}</section>`;
+  <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current occupant only · ${esc(property()?.name||'property')} · auto-refreshes after edits</span></div><div class="room-grid">${cards}</div></section>
+  <section class="panel"><div class="panel-head"><h2>Current & upcoming stays</h2><div class="seg">${['current','upcoming','historical'].map(v=>`<button class="${state.view===v?'active':''}" data-view="${v}">${v==='historical'?'Historical / Archive':v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div></div>${tenancyTable(viewRows,true)}</section>`;
 }
 
 
@@ -2924,7 +3147,7 @@ function tenancyTable(rows,showActions=false){
   ${rows.sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')).map(t=>{
     const b=bondForTenancy(t.id),due=nextRentDue(t),rs=rentState(t);
     const dueNote=rs==='overdue'?`<div class="danger-text small">Overdue ${overdueDays(t)} day${overdueDays(t)===1?'':'s'}</div>`:rs==='due today'?'<div class="small" style="color:var(--red);font-weight:800">Due today</div>':rs==='due soon'?'<div class="small" style="color:var(--amber)">Due soon</div>':rs==='awaiting payment'?'<div class="small" style="color:var(--amber)">Awaiting payment</div>':rs==='unpaid'?'<div class="danger-text small">Unpaid</div>':rs==='paid'?'<div class="small" style="color:var(--green)">Paid</div>':'';
-    return `<tr><td><b>${esc(tenantBy(t.tenant_id)?.name||'Tenant')}</b><div class="muted small">${esc(t.notes||'')}</div></td><td>${esc(roomLabel(t.room_id))}</td><td>${esc((t.tenancy_type||'').replace('_',' '))}</td><td>${fmtDate(t.check_in)}${t.check_in_time?`<div class="muted small">${esc(t.check_in_time.slice(0,5))}</div>`:''}</td><td>${fmtDate(t.check_out||t.confirmed_until)}</td><td>${formatRentalRate(t)}<div class="muted small">${isOneOffStay(t)?'one-off stay':(t.payment_cycle_weeks?`every ${t.payment_cycle_weeks} wk`:'')}</div></td><td>${due?fmtDate(due):'—'}${dueNote}</td><td>${b?`${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} remaining<div class="muted small">${esc(bondDepositStatus(b))}</div>`:'—'}</td><td>${badge(isCancelledOrNoShow(t)?normalizeBookingStatus(t):tenancyKind(t))}${isCancelledOrNoShow(t)?`<div class="muted small">${esc(bookingStatusLabel(t))}</div>`:''}</td>${showActions?`<td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${t.tenant_id}">Tenant</button><button class="btn ghost edit-tenancy" data-tenancy="${t.id}">Stay</button>${!isCancelledOrNoShow(t)?`<button class="btn ghost cancel-booking-row" data-tenancy="${t.id}">Cancel booking</button>`:''}</div>`:'—'}</td>`:''}</tr>`;
+    return `<tr><td><b>${esc(tenantBy(t.tenant_id)?.name||'Tenant')}</b><div class="muted small">${esc(t.notes||'')}</div></td><td>${esc(roomLabel(t.room_id))}</td><td>${esc((t.tenancy_type||'').replace('_',' '))}</td><td>${fmtDate(t.check_in)}${t.check_in_time?`<div class="muted small">${esc(t.check_in_time.slice(0,5))}</div>`:''}</td><td>${fmtDate(t.check_out||t.confirmed_until)}</td><td>${formatRentalRate(t)}<div class="muted small">${isOneOffStay(t)?'one-off stay':(t.payment_cycle_weeks?`every ${t.payment_cycle_weeks} wk`:'')}</div></td><td>${due?fmtDate(due):'—'}${dueNote}</td><td>${b?`${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} remaining<div class="muted small">${esc(bondDepositStatus(b))}</div>`:'—'}</td><td>${badge(isCancelledOrNoShow(t)?normalizeBookingStatus(t):tenancyKind(t))}${isCancelledOrNoShow(t)?`<div class="muted small">${esc(bookingStatusLabel(t))}</div>`:''}</td>${showActions?`<td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${t.tenant_id}">Edit tenant</button><button class="btn ghost edit-tenancy" data-tenancy="${t.id}">Edit stay</button><button class="btn ghost delete-stay-row" data-tenancy="${t.id}">Delete stay</button>${!isCancelledOrNoShow(t)&&!isAdminVoided(t)?`<button class="btn ghost cancel-booking-row" data-tenancy="${t.id}">Cancel booking</button>`:''}</div>`:'—'}</td>`:''}</tr>`;
   }).join('')}
   </tbody></table></div>`;
 }
@@ -2933,6 +3156,8 @@ function tenantsPage(){
   let filter=state.tenantFilter||'current';
   if(filter==='past')filter='historical';
   if(filter==='all')filter='current';
+  // Operational default: Current (not Historical). Archive is a separate tab.
+  if(!['current','upcoming','historical'].includes(filter))filter='current';
   state.tenantFilter=filter;
   const propName=property()?.name||'this property';
   const allRows=state.tenants.map(t=>tenantProfileRow(t)).filter(x=>x.onProperty&&x.stay);
@@ -2941,14 +3166,16 @@ function tenantsPage(){
     upcoming:allRows.filter(x=>x.kind==='upcoming').length,
     historical:allRows.filter(x=>x.kind==='historical').length
   };
+  // Main operational list = Current + Upcoming only when browsing those tabs.
+  // Historical/Archive is never mixed into Current or Upcoming.
   const rows=allRows
     .filter(x=>x.kind===filter)
     .sort((a,b)=>(a.tenant.name||'').localeCompare(b.tenant.name||''));
   const tabLabel=k=>{
-    const title=k==='current'?'Current':k==='upcoming'?'Upcoming':'Historical';
+    const title=k==='current'?'Current':k==='upcoming'?'Upcoming':'Historical / Archive';
     return `${title} (${counts[k]})`;
   };
-  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — Current = active occupancy today · Upcoming = confirmed not yet moved in · Historical = completed / ended / cancelled (kept for audit).</span></div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — operational tabs are <b>Current</b> and <b>Upcoming</b>. Historical / Archive is separate for audit (records are kept, never auto-deleted).</span></div></div>
   <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, contact, room, stay type or notes on this property…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','historical'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Current / Latest Room</th><th>Stay Type</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
   ${rows.map(({tenant,stay,p,r,kind,journey,segments,currentSeg})=>{
@@ -2969,7 +3196,7 @@ function tenantsPage(){
       ? `${esc(p?.name||'—')}<div class="muted small">${kind==='current'&&curRoom?`Current: ${esc(curRoom)} · `:''}${esc(bookingSegments(stay).filter(x=>!isCancelledOrNoShow(x)).map(s=>roomShortName(roomBy(s.room_id))).filter((v,i,a)=>a.indexOf(v)===i).join(' → '))}</div>`
       : `${esc(p?.name||'—')}${r?` · ${esc(roomShortName(r))}`:''}<div class="muted small">${esc(stay?.sleeping_location||'')}</div>`;
     const contact=esc(tenant.contact_method||'—');
-    return `<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes,statusLbl,journey].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(displayCleanNotes(tenant.notes)||'')}</div><div class="muted small">${esc(staySummary)}</div>${segLines}${stay?.cancellation_reason||depositTreatment(stay)?`<div class="muted small">Cancel: ${esc(stay.cancellation_reason||depositTreatment(stay))}</div>`:''}${b?`<div class="muted small">Deposit ${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')} · ${esc(bondDepositStatus(b))}</div>`:''}${ev.length?`<div class="muted small">${ev.map(x=>esc(x.event_type)).join(' · ')}</div>`:''}</td><td>${contact}</td><td>${roomCell}</td><td>${stayType}</td><td>${stay?formatRentalRate(stay):'—'}${stay&&bookingGroupId(stay)?`<div class="muted small">${esc(bookingGroupBreakdown(stay).label)}</div>`:''}${stay&&isCancelledOrNoShow(stay)&&rentTreatment(stay)!=='keep_due'?`<div class="muted small">Rent not payable</div>`:''}</td><td>${stay?badge(statusLbl):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button>`:''}${stay&&!isCancelledOrNoShow(stay)?`<button class="btn ghost cancel-booking-row" data-tenancy="${stay.id}">Cancel booking</button>`:''}</div>`:'—'}</td></tr>`;
+    return `<tr data-tenant-search="${esc([tenant.name,tenant.notes,tenant.contact_method,p?.name,r?roomShortName(r):'',stay?.tenancy_type,stay?.sleeping_location,stay?.notes,statusLbl,journey].map(v=>String(v??'').toLowerCase()).join(' '))}"><td><b>${esc(tenant.name)}</b><div class="muted small">${esc(displayCleanNotes(tenant.notes)||'')}</div><div class="muted small">${esc(staySummary)}</div>${segLines}${stay?.cancellation_reason||depositTreatment(stay)?`<div class="muted small">Cancel: ${esc(stay.cancellation_reason||depositTreatment(stay))}</div>`:''}${b?`<div class="muted small">Deposit ${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')} · ${esc(bondDepositStatus(b))}</div>`:''}${ev.length?`<div class="muted small">${ev.map(x=>esc(x.event_type)).join(' · ')}</div>`:''}</td><td>${contact}</td><td>${roomCell}</td><td>${stayType}</td><td>${stay?formatRentalRate(stay):'—'}${stay&&!isOneOffStay(stay)&&stay.payment_cycle_weeks?`<div class="muted small">every ${esc(stay.payment_cycle_weeks)} wk</div>`:''}${stay&&bookingGroupId(stay)?`<div class="muted small">${esc(bookingGroupBreakdown(stay).label)}</div>`:''}${stay&&isCancelledOrNoShow(stay)&&rentTreatment(stay)!=='keep_due'?`<div class="muted small">Rent not payable</div>`:''}</td><td>${stay?badge(statusLbl):'—'}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-tenant" data-tenant="${tenant.id}">Edit tenant</button>${stay?`<button class="btn ghost edit-tenancy" data-tenancy="${stay.id}">Edit stay</button><button class="btn ghost delete-stay-row" data-tenancy="${stay.id}">Delete stay</button>`:''}${stay&&!isCancelledOrNoShow(stay)&&!isAdminVoided(stay)?`<button class="btn ghost cancel-booking-row" data-tenancy="${stay.id}">Cancel booking</button>`:''}</div>`:'—'}</td></tr>`;
   }).join('')||`<tr><td colspan="7" class="muted">No tenants for ${esc(propName)} in this filter.</td></tr>`}</tbody></table></div></section>`;
 }
 function getExtraRoomFee(p){
@@ -3060,10 +3287,12 @@ function roomsPage(){
   }).join('')}</div></section>`;
 }
 function reservedEnd(t){
-  if(isOperationallyClosed(t))return t.check_in||null; // frees all future dates
+  // Closed / voided / cancelled frees ALL future dates (still visible on past nights via stayBlocksDate false).
+  if(isOperationallyClosed(t))return t.check_in||null;
   if(t.check_out)return t.check_out;
   if(t.confirmed_until)return addDays(t.confirmed_until,1);
-  if(t.tenancy_type==='long_term'&&(t.status==='active'||t.status==='upcoming'||t.status==='tbc'))return '9999-12-31';
+  // Open-ended long-term only while still operationally live (not date-ended via other means).
+  if(t.tenancy_type==='long_term'&&!isOperationallyClosed(t)&&tenancyKind(t)!=='historical')return '9999-12-31';
   return t.check_in||null;
 }
 /**
@@ -3133,6 +3362,8 @@ function roomOccupiedOverlap(roomId,start,end,opts={}){
     if(exclude.has(Number(t.id)))return false;
     if(Number(t.room_id)!==Number(roomId)||!t.check_in)return false;
     if(isOperationallyClosed(t))return false;
+    // Property isolation: only same-property allocations can conflict.
+    if(!isStayOnProperty(t,roomBy(roomId)?.property_id))return false;
     const iv=occupancyInterval(t);
     if(!iv)return false;
     return intervalsOverlapMs(reqStartMs,reqEndMs,iv.startMs,iv.endMs);
@@ -3166,7 +3397,9 @@ function viewingPeopleLabel(v){
   return `${n} visitor${n===1?'':'s'}`;
 }
 function availabilityPage(){
-  const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id))), ts=scopedTenancies().filter(t=>t.room_id===null||roomIds.has(Number(t.room_id)));
+  const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id)));
+  // Operational calendar SoT: property-scoped allocations only (never null-room cross-property leak).
+  const ts=scopedTenancies().filter(t=>t.room_id!=null&&roomIds.has(Number(t.room_id)));
   const startIso=today(), endIso=addDays(startIso,89);
   const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
@@ -3203,7 +3436,7 @@ function availabilityPage(){
   rooms.forEach(r=>{
     matrix+=`<div class="cal-cell room">${esc(roomShortName(r))}</div>`;
     dates.forEach(({iso,dow})=>{
-      const roomTs=ts.filter(t=>Number(t.room_id)===Number(r.id));
+      const roomTs=dedupeRoomStayRows(ts.filter(t=>Number(t.room_id)===Number(r.id)));
       const active=roomTs.filter(t=>stayBlocksDate(t,iso));
       const arriving=roomTs.filter(t=>!isOperationallyClosed(t)&&t.check_in===iso);
       const departing=roomTs.filter(t=>{
@@ -3280,7 +3513,8 @@ function viewingsPage(){
   </tbody></table></div></section>`;
 }
 function paymentsPage(){
-  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id)), rows=state.payments.filter(p=>ids.has(p.tenancy_id)).sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
+  const ts=scopedTenancies(), ids=new Set(ts.map(t=>Number(t.id)));
+  const allPayRows=scopedPayments().sort((a,b)=>(b.received_date||'').localeCompare(a.received_date||''));
   const dueRows=ts.filter(t=>tenancyKind(t)!=='historical'&&isPaymentGroupPrimary(t)&&(needsPaymentAction(t)||nextRentDue(t)||rentState(t)==='paid'))
     .sort((a,b)=>{
       const ra=needsPaymentAction(a)?0:1,rb=needsPaymentAction(b)?0:1;if(ra!==rb)return ra-rb;
@@ -3305,6 +3539,32 @@ function paymentsPage(){
     }
     return true;
   });
+  // Rent payment history filters (property defaults to selected property via scopedPayments).
+  const payQ=(state.paymentSearch||'').trim().toLowerCase();
+  const payTenant=state.paymentFilterTenant||'';
+  const payRoom=state.paymentFilterRoom||'';
+  const payMethod=state.paymentFilterMethod||'';
+  const payStatus=state.paymentFilterStatus||'all';
+  const payFrom=state.paymentFilterFrom||'';
+  const payTo=state.paymentFilterTo||'';
+  const rows=allPayRows.filter(p=>{
+    const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
+    if(payTenant&&Number(t?.tenant_id)!==Number(payTenant))return false;
+    if(payRoom&&Number(t?.room_id)!==Number(payRoom))return false;
+    if(payMethod&&normalizePaymentMethod(p.payment_method)!==payMethod)return false;
+    if(payStatus!=='all'&&String(p.status||'recorded').toLowerCase()!==payStatus.toLowerCase())return false;
+    if(payFrom&&(p.received_date||'')<payFrom)return false;
+    if(payTo&&(p.received_date||'')>payTo)return false;
+    if(payQ){
+      const hay=[tenantBy(t?.tenant_id)?.name,roomLabel(t?.room_id),p.reference,displayPaymentNotes(p),p.notes,String(p.id)].map(v=>String(v||'').toLowerCase()).join(' ');
+      if(!hay.includes(payQ))return false;
+    }
+    return true;
+  });
+  const tenantOpts=[...new Map(ts.map(t=>[Number(t.tenant_id),tenantBy(t.tenant_id)?.name||`Tenant ${t.tenant_id}`])).entries()]
+    .sort((a,b)=>String(a[1]).localeCompare(String(b[1])))
+    .map(([id,name])=>`<option value="${id}" ${Number(payTenant)===Number(id)?'selected':''}>${esc(name)}</option>`).join('');
+  const roomOpts=currentPropertyRooms().map(r=>`<option value="${r.id}" ${Number(payRoom)===Number(r.id)?'selected':''}>${esc(roomShortName(r))}</option>`).join('');
   const filter=state.actionFilter||'open';
   const actionRows=displayPaymentActions(filter);
   const setup=state.paymentActionsError?`<div class="note" style="margin-bottom:12px"><b>Persisted action history optional.</b> Derived reminders still work. To enable Edit / History / Supersede storage, owner can run <code>Rental Management/supabase_payment_actions_cancel.sql</code> (manual approval — not auto-run).</div>`:'';
@@ -3361,7 +3621,7 @@ function paymentsPage(){
     return `<tr><td><b>${esc(tenantBy(a.tenant_id||t?.tenant_id)?.name||paymentGroupName(t)||'Tenant')}</b><div class="muted small">${esc(propertyBy(a.property_id)?.name||property()?.name||'')} · ${esc(roomLbl)}</div></td><td>${related}</td><td>${esc(paymentActionTypeLabel(a))}</td><td><b>${money(showAmt)}</b>${breakdown?`<div class="muted small">${esc(breakdown.label)}</div>`:''}${paidAmt>0?`<div class="muted small">Paid ${money(paidAmt)} / ${money(origAmt)}</div>`:''}</td><td>${fmtDate(a.due_date)}</td><td><span class="action-status-${esc(st)}">${badge(st)}</span>${a.resolve_reason||a.supersede_reason?`<div class="muted small">${esc(a.resolve_reason||a.supersede_reason)}</div>`:''}</td><td>${esc(String(a.notes||'').split('\n').filter(x=>!/^ORIGINAL_AMOUNT:|^PAYMENT_ID:|^VIEWING_ID:|^TENANCY_ID:/.test(x)).join(' '))}</td><td>${staff}</td><td>${actionBtns(a)}</td></tr>`;
   }).join('')}</tbody></table></div>`:'<div class="empty">No payment actions in this filter.</div>'}</section>`;
   return `${actionPanel}
-  <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Multi-room booking groups show once (sum of segments). Cancelled bookings excluded.</div></div></div>
+  <section class="panel"><div class="panel-head"><div><h2>Rent due schedule</h2><div class="muted small">Long-term stays use payment cycles. Short / confirmed short stays use one-off stay total. Shared room + check-in = one payment group. Multi-room booking groups show once (sum of segments). Cancelled bookings excluded. Amount expected = weekly rent × payment cycle weeks.</div></div></div>
   <div class="schedule-tools">
     <label>Search<input id="schedule-search" placeholder="Tenant, room, property" value="${esc(state.scheduleSearch||'')}"></label>
     <label>Status<select id="schedule-status">
@@ -3381,7 +3641,19 @@ function paymentsPage(){
     const bgNote=bookingGroupId(t)?`<div class="muted small">Multi-room booking · ${esc(bookingGroupBreakdown(t).label)}</div>`:(members.length>1?`<div class="muted small">Shared payment group</div>`:'');
     return `<tr><td>${esc(paymentGroupName(t))}${bgNote}${isOneOffStay(t)?`<div class="muted small">Short / one-off stay</div>`:''}</td><td>${esc(roomCell)}</td><td>${esc(cycleLabel(t))}</td><td>${nextRentDue(t)?fmtDate(nextRentDue(t)):'—'}</td><td>${money(paymentDueAmount(t))}${isOneOffStay(t)&&groupPaymentAmount(t)>0?`<div class="muted small">paid ${money(groupPaymentAmount(t))} / ${money(expectedStayTotal(t))}</div>`:''}</td><td>${statusCell(t)}</td></tr>`;
   }).join('')||'<tr><td colspan="6" class="muted">No active rent schedule rows.</td></tr>'}</tbody></table></div></section>
-  <section class="panel"><div class="panel-head"><h2>Rent payments</h2>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotesOrDash(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments recorded.</div>'}</section>`;
+  <section class="panel"><div class="panel-head"><div><h2>Rent payments</h2><div class="muted small">Defaults to <b>${esc(property()?.name||'selected property')}</b>. Filters are display-only — they do not alter payment records.</div></div>${canEdit()?'<button id="add-payment" class="btn primary">+ Record payment</button>':''}</div>
+  <div class="schedule-tools">
+    <label>Property<select id="payment-filter-property" disabled><option>${esc(property()?.name||'Property')}</option></select></label>
+    <label>Tenant<select id="payment-filter-tenant"><option value="">All tenants</option>${tenantOpts}</select></label>
+    <label>Room<select id="payment-filter-room"><option value="">All rooms</option>${roomOpts}</select></label>
+    <label>From<input id="payment-filter-from" type="date" value="${esc(payFrom)}"></label>
+    <label>To<input id="payment-filter-to" type="date" value="${esc(payTo)}"></label>
+    <label>Method<select id="payment-filter-method"><option value="">All methods</option>${['Cash','EFT','WeChat'].map(m=>`<option value="${m}" ${payMethod===m?'selected':''}>${m}</option>`).join('')}</select></label>
+    <label>Status<select id="payment-filter-status"><option value="all" ${payStatus==='all'?'selected':''}>All</option>${['paid','recorded','unpaid','void'].map(s=>`<option value="${s}" ${payStatus===s?'selected':''}>${s}</option>`).join('')}</select></label>
+    <label>Search<input id="payment-search" placeholder="Tenant, reference, notes" value="${esc(state.paymentSearch||'')}"></label>
+    <button type="button" class="btn ghost" id="payment-filters-reset">Clear filters / Reset</button>
+  </div>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotesOrDash(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments match these filters.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
  const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
@@ -3429,17 +3701,21 @@ function incomePage(){
   </div>`;
 }
 function bondsPage(){
-  const filter=state.bondFilter||'current';
-  const ts=scopedTenancies(), ids=new Set(ts.map(t=>t.id));
-  const all=state.bonds.filter(b=>ids.has(b.tenancy_id)).sort((a,b)=>b.id-a.id);
-  const currentRows=all.filter(b=>bondBucket(b)==='current');
-  const pastRows=all.filter(b=>bondBucket(b)==='past');
-  const rows=filter==='past'?pastRows:currentRows;
-  const historyRows=all; // history for all bonds on this property (current + past)
-  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Current = held / unresolved (including ended stays awaiting refund). Past = stay ended/cancelled <b>and</b> bond financially finalised.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
-  <div class="tenant-tools"><div class="view-switch"><button class="${filter==='current'?'active':''}" data-bfilter="current">Current (${currentRows.length})</button><button class="${filter==='past'?'active':''}" data-bfilter="past">Past (${pastRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${esc(bondBucket(b))}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit Bond</button><button class="btn ghost bond-action" data-bond="${b.id}">Record Refund</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${esc(filter)} bond records.</div>`}</section>
-  <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (current and past).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
+  let filter=state.bondFilter||'open';
+  if(filter==='current')filter='open';
+  if(filter==='past')filter='closed';
+  state.bondFilter=filter;
+  const all=scopedBonds().sort((a,b)=>b.id-a.id);
+  const openRows=all.filter(b=>bondBucket(b)==='open');
+  const closedRows=all.filter(b=>bondBucket(b)==='closed');
+  const rows=filter==='closed'?closedRows:openRows;
+  const historyRows=all;
+  const totals=openBondTotalsByCurrency();
+  const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
+  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
+  <div class="tenant-tools"><div class="view-switch"><button class="${filter==='open'?'active':''}" data-bfilter="open">Open (${openRows.length})</button><button class="${filter==='closed'?'active':''}" data-bfilter="closed">Refunded / Closed (${closedRows.length})</button></div></div>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
+  <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
   const roomIds=new Set(currentPropertyRooms().map(r=>r.id)), rows=state.priceHistory.filter(x=>roomIds.has(x.room_id));
@@ -3575,6 +3851,24 @@ function render(){
   $$('.resolve-payment-action').forEach(b=>b.onclick=()=>setPaymentActionStatus(b.dataset.action,'resolved','Marked resolved'));
   $$('.waive-payment-action').forEach(b=>b.onclick=()=>setPaymentActionStatus(b.dataset.action,'waived',prompt('Waive reason?')||'Waived'));
   $$('.cancel-booking-row').forEach(b=>b.onclick=()=>openCancelBooking(Number(b.dataset.tenancy)));
+  $$('.delete-stay-row').forEach(b=>b.onclick=()=>openDeleteStayDialog(Number(b.dataset.tenancy)));
+  const pft=$('#payment-filter-tenant'); if(pft)pft.onchange=e=>{state.paymentFilterTenant=e.target.value;render()};
+  const pfr=$('#payment-filter-room'); if(pfr)pfr.onchange=e=>{state.paymentFilterRoom=e.target.value;render()};
+  const pfm=$('#payment-filter-method'); if(pfm)pfm.onchange=e=>{state.paymentFilterMethod=e.target.value;render()};
+  const pfs=$('#payment-filter-status'); if(pfs)pfs.onchange=e=>{state.paymentFilterStatus=e.target.value;render()};
+  const pff=$('#payment-filter-from'); if(pff)pff.onchange=e=>{state.paymentFilterFrom=e.target.value;render()};
+  const pfto=$('#payment-filter-to'); if(pfto)pfto.onchange=e=>{state.paymentFilterTo=e.target.value;render()};
+  const psrch=$('#payment-search'); if(psrch)psrch.oninput=e=>{state.paymentSearch=e.target.value;render()};
+  const pfreset=$('#payment-filters-reset'); if(pfreset)pfreset.onclick=()=>{
+    state.paymentSearch='';
+    state.paymentFilterTenant='';
+    state.paymentFilterRoom='';
+    state.paymentFilterMethod='';
+    state.paymentFilterStatus='all';
+    state.paymentFilterFrom='';
+    state.paymentFilterTo='';
+    render();
+  };
   $$('.forfeit-from-action').forEach(b=>b.onclick=()=>openForfeitForTenancy(Number(b.dataset.tenancy)));
   $$('.refund-from-action').forEach(b=>b.onclick=()=>openRefundForTenancy(Number(b.dataset.tenancy)));
   $$('.view-action-history').forEach(b=>b.onclick=()=>openPaymentActionHistory(b.dataset.action));
@@ -3781,7 +4075,7 @@ function staySegmentCardHtml(idx,rooms,data={}){
       <label>Rate unit<select class="seg-rent-period">
         ${['night','week','fortnight','four_weeks','total'].map(u=>`<option value="${u}" ${period===u?'selected':''}>${({night:'per night',week:'per week',fortnight:'per fortnight',four_weeks:'per 4 weeks',total:'fixed total'})[u]}</option>`).join('')}
       </select></label>
-      <label>Payment cycle (weeks)<input class="seg-payment-cycle" type="number" min="1" placeholder="Optional" value="${data.payment_cycle_weeks!=null?esc(data.payment_cycle_weeks):''}"></label>
+      <label>Payment cycle<select class="seg-payment-cycle"><option value="">—</option><option value="1" ${Number(data.payment_cycle_weeks)===1?'selected':''}>Every 1 week</option><option value="2" ${Number(data.payment_cycle_weeks)===2?'selected':''}>Every 2 weeks</option><option value="4" ${Number(data.payment_cycle_weeks)===4?'selected':''}>Every 4 weeks</option></select></label>
       <label>People count<input class="seg-people" type="number" min="1" value="${esc(data.people_count||1)}"></label>
       <label>Bills included<select class="seg-bills"><option value="false" ${data.bills_included?'':'selected'}>No</option><option value="true" ${data.bills_included?'selected':''}>Yes</option></select></label>
       <label>Manual override (optional)<input class="seg-rent-override" type="number" step="0.01" min="0" placeholder="Leave blank" value="${data.rent_override!=null?esc(data.rent_override):''}"></label>
@@ -3882,7 +4176,7 @@ function editAllocationCardHtml(idx,rooms,data={}){
       <label>Rate unit<select class="seg-rent-period" ${historical?'disabled':''}>
         ${['night','week','fortnight','four_weeks','total','day'].map(u=>`<option value="${u}" ${period===u?'selected':''}>${({night:'per night',week:'per week',fortnight:'per fortnight',four_weeks:'per 4 weeks',total:'fixed total',day:'per day (legacy)'})[u]}</option>`).join('')}
       </select></label>
-      <label>Payment cycle (weeks)<input class="seg-payment-cycle" type="number" min="1" placeholder="Optional" value="${data.payment_cycle_weeks!=null?esc(data.payment_cycle_weeks):''}" ${historical?'disabled':''}></label>
+      <label>Payment cycle<select class="seg-payment-cycle" ${historical?'disabled':''}><option value="">—</option><option value="1" ${Number(data.payment_cycle_weeks)===1?'selected':''}>Every 1 week</option><option value="2" ${Number(data.payment_cycle_weeks)===2?'selected':''}>Every 2 weeks</option><option value="4" ${Number(data.payment_cycle_weeks)===4?'selected':''}>Every 4 weeks</option></select></label>
       <label>People count<input class="seg-people" type="number" min="1" value="${esc(data.people_count||1)}" ${historical?'disabled':''}></label>
       <label>Manual override (optional)<input class="seg-rent-override" type="number" step="0.01" min="0" placeholder="Leave blank" value="${meta.override!=null?esc(meta.override):(data.rent_override!=null?esc(data.rent_override):'')}" ${historical?'disabled':''}></label>
       <label>Override note<input class="seg-rent-override-note" placeholder="Reason (optional)" value="${esc(meta.overrideNote||data.rent_override_note||'')}" ${historical?'disabled':''}></label>
@@ -4302,7 +4596,7 @@ function openTenancy(id){
     metaBox.textContent=br.segments.length>1?`Booking rent: ${br.label}`:'';
   }
   const cb=$('#cancel-booking');if(cb)cb.classList.toggle('hidden',isCancelledOrNoShow(t)||!canEdit());
-  const ds=$('#delete-stay'); if(ds){ds.classList.toggle('hidden', role()!=='owner'||!canEdit());}
+  const ds=$('#delete-stay'); if(ds){ds.classList.toggle('hidden', !canEdit());}
   updateTenancyRentPreview();
   $('#tenancy-dialog').showModal();
 }
@@ -4373,25 +4667,66 @@ function openPaymentActionHistory(id){
   $('#payment-action-history-dialog').showModal();
 }
 async function deleteStay(tenancyId){
-  if(role()!=='owner'){alert('Only the owner can delete a stay record.');return}
+  if(!canEdit()){alert('Only authorised staff can delete a stay.');return}
+  const t=state.tenancies.find(x=>Number(x.id)===Number(tenancyId)); if(!t)return;
+  openDeleteStayDialog(tenancyId);
+}
+function openDeleteStayDialog(tenancyId){
+  if(!canEdit())return;
   const t=state.tenancies.find(x=>Number(x.id)===Number(tenancyId)); if(!t)return;
   const blockers=tenancyDeleteBlockers(tenancyId);
-  if(blockers.length){
-    alert('This stay cannot be deleted because related records exist:\n• '+blockers.join('\n• ')+'\n\nCancel booking keeps history. Remove/refund related payments, bonds and actions first if this was created in error.');
-    return;
+  const name=tenantBy(t.tenant_id)?.name||'Tenant';
+  const f=$('#delete-stay-form');
+  if(!f){alert('Delete stay dialog missing');return}
+  f.reset();
+  f.elements.tenancy_id.value=String(t.id);
+  const mode=blockers.length?'void':'hard';
+  $('#delete-stay-summary').innerHTML=`<div class="table-wrap"><table><tbody>
+    <tr><th>Tenant</th><td><b>${esc(name)}</b><div class="muted small">Tenant ID ${esc(t.tenant_id)}</div></td></tr>
+    <tr><th>Room</th><td>${esc(roomLabel(t.room_id))}</td></tr>
+    <tr><th>Stay dates</th><td>${fmtDate(t.check_in)}${t.check_in_time?` ${esc(normalizeClock(t.check_in_time).slice(0,5))}`:''} → ${fmtDate(effectiveOccupancyEnd(t))}${t.check_out_time?` ${esc(normalizeClock(t.check_out_time).slice(0,5))}`:''}</td></tr>
+    <tr><th>Booking / stay ID</th><td>${esc(t.id)}${bookingGroupId(t)?`<div class="muted small">Booking group ${esc(bookingGroupId(t))}</div>`:''}</td></tr>
+  </tbody></table></div>`;
+  if(mode==='hard'){
+    $('#delete-stay-warning').innerHTML=`<b>Hard delete:</b> No rent payments, bond/deposit, refund, deduction, forfeiture, or other financial/audit history is linked. This permanently removes the erroneous stay. Cancel booking is different — it keeps a legitimate booking in audit history.`;
+    $('#delete-stay-confirm-btn').textContent='Confirm permanent delete';
+  }else{
+    $('#delete-stay-warning').innerHTML=`<b>Cannot hard-delete — financial / audit history exists:</b><ul style="margin:8px 0 0 18px">${blockers.map(x=>`<li>${esc(x)}</li>`).join('')}</ul><div style="margin-top:8px">Instead this will <b>administratively void</b> the stay: it leaves payment/bond history intact, removes the stay from Calendar / Availability / Room Status / Current / Upcoming, and keeps an archive trail. Payments and bonds are <b>not</b> deleted.</div>`;
+    $('#delete-stay-confirm-btn').textContent='Confirm administrative void';
   }
-  const name=tenantBy(t.tenant_id)?.name||'this stay';
-  if(!confirm(`Delete stay for ${name}?\n\nDelete removes an erroneous record.\nCancel booking preserves history but marks it cancelled.`))return;
-  try{
-    // Remove dependent soft links first where safe (no payments/bonds left by blockers).
+  $('#delete-stay-error').classList.add('hidden');
+  $('#tenancy-dialog')?.close();
+  $('#delete-stay-dialog').showModal();
+}
+async function confirmDeleteOrVoidStay(tenancyId,reason){
+  const t=state.tenancies.find(x=>Number(x.id)===Number(tenancyId)); if(!t)throw new Error('Stay not found');
+  const blockers=tenancyDeleteBlockers(tenancyId);
+  const uid=getSession()?.user?.id||null;
+  if(!blockers.length){
     await api('payment_actions',`tenancy_id=eq.${tenancyId}`,{method:'DELETE'}).catch(()=>{});
     await api('tenancies',`id=eq.${tenancyId}`,{method:'DELETE'});
-    const uid=getSession()?.user?.id||null;
-    insert('activity_log',{user_id:uid,action:'delete_stay',entity_type:'tenancy',entity_id:String(tenancyId),details:{tenant_id:t.tenant_id,room_id:t.room_id,check_in:t.check_in,check_out:t.check_out}}).catch(()=>{});
-    $('#tenancy-dialog').close();
-    toast('Stay deleted');
-    await loadAll();
-  }catch(e){alert(e.message)}
+    insert('activity_log',{user_id:uid,action:'delete_stay',entity_type:'tenancy',entity_id:String(tenancyId),details:{tenant_id:t.tenant_id,room_id:t.room_id,check_in:t.check_in,check_out:t.check_out,reason:reason||null}}).catch(()=>{});
+    return {mode:'deleted'};
+  }
+  // Administrative void — preserve financial records; exclude from operational occupancy.
+  let notes=upsertNoteMarker(t.notes||'','ADMIN_VOID','1');
+  notes=upsertNoteMarker(notes,'ADMIN_VOID_AT',new Date().toISOString());
+  if(uid)notes=upsertNoteMarker(notes,'ADMIN_VOID_BY',uid);
+  if(reason)notes=upsertNoteMarker(notes,'ADMIN_VOID_REASON',reason);
+  notes=withCancelMarkers(notes,{
+    cancellation_date:today(),
+    cancellation_reason:reason||'Administrative void — duplicate/erroneous stay',
+    cancelled_by:uid,
+    deposit_treatment:'keep_held',
+    rent_treatment:'not_payable'
+  });
+  await patch('tenancies',`id=eq.${tenancyId}`,{
+    status:'cancelled',
+    cancellation_reason:reason||'Administrative void — duplicate/erroneous stay',
+    notes
+  });
+  insert('activity_log',{user_id:uid,action:'admin_void_stay',entity_type:'tenancy',entity_id:String(tenancyId),details:{tenant_id:t.tenant_id,room_id:t.room_id,blockers,reason:reason||null}}).catch(()=>{});
+  return {mode:'voided',blockers};
 }
 function openCancelBooking(tenancyId){
   if(!canEdit())return;
@@ -5073,7 +5408,20 @@ $('#end-tenancy').onclick=async()=>{
 $('#cancel-booking').onclick=()=>{
   const id=Number($('#tenancy-form').elements.id.value);if(id)openCancelBooking(id);
 };
-$('#delete-stay').onclick=()=>{const id=Number($('#tenancy-form').elements.id.value);if(id)deleteStay(id)};
+$('#delete-stay').onclick=()=>{const id=Number($('#tenancy-form').elements.id.value);if(id)openDeleteStayDialog(id)};
+$('#delete-stay-form').onsubmit=async e=>{
+  e.preventDefault();if(!canEdit())return;
+  const f=e.currentTarget,err=$('#delete-stay-error');err.classList.add('hidden');
+  if(!f.elements.confirm_delete.checked){err.textContent='Please confirm this administrative correction.';err.classList.remove('hidden');return}
+  const id=Number(f.elements.tenancy_id.value);
+  const reason=String(f.elements.reason.value||'').trim();
+  try{
+    const result=await confirmDeleteOrVoidStay(id,reason);
+    $('#delete-stay-dialog').close();
+    toast(result.mode==='deleted'?'Stay deleted':'Stay administratively voided — financial history kept');
+    await loadAll();
+  }catch(ex){err.textContent=ex.message||String(ex);err.classList.remove('hidden')}
+};
 $('#cancel-booking-form').onsubmit=async e=>{
   e.preventDefault();if(!canEdit())return;
   const f=e.currentTarget,fd=new FormData(f),err=$('#cancel-booking-error');err.classList.add('hidden');

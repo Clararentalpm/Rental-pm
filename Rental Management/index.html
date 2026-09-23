@@ -61,7 +61,7 @@ label{display:grid;gap:6px;font-weight:700;font-size:12px}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--muted);align-items:center}.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:4px;vertical-align:middle}
 .legend .lg-available{background:var(--green)}.legend .lg-current{background:var(--accent)}.legend .lg-upcoming{background:var(--purple)}.legend .lg-depart{background:var(--amber)}.legend .lg-insp{background:#7c3aed}
 .view-switch{display:flex;gap:6px;background:#f2f4f7;padding:4px;border-radius:10px}.view-switch button{border:0;background:transparent;padding:8px 12px;border-radius:8px;font-weight:800;cursor:pointer}.view-switch button.active{background:#fff;box-shadow:0 1px 4px #10182818;color:var(--accent)}
-.finder{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end}.vacancy-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}.vacancy-card h3{margin:0 0 8px}.vacancy-slot{padding:7px 9px;margin-top:6px;border-radius:8px;background:var(--greenSoft);color:var(--green);font-weight:750}
+.finder{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end}.vacancy-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff}.vacancy-card h3{margin:0 0 8px}.vacancy-card .vacancy-occ{margin:4px 0 2px;font-size:14px;font-weight:750}.vacancy-card .vacancy-meta{font-size:12px;color:var(--muted);margin-top:2px}.vacancy-card .vacancy-meta b{color:var(--ink);font-weight:750}.vacancy-slot{padding:7px 9px;margin-top:6px;border-radius:8px;background:var(--greenSoft);color:var(--green);font-weight:750}
 .price-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.alert-card{border:1px solid var(--line);border-radius:13px;padding:14px;background:#fff;box-shadow:0 2px 10px #10182808}.alert-card strong{font-size:24px}.alert-card strong{display:block;font-size:22px;margin-top:4px}.tenant-actions{display:flex;gap:6px;flex-wrap:wrap}.danger-text{color:var(--red);font-weight:750}dl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:12px 0 0}dt{font-size:11px;color:var(--muted)}dd{margin:0;text-align:right;font-size:12px;font-weight:750}
 
 .find-result-panel{margin-top:14px;padding:16px 18px;border:2px solid var(--green);border-radius:14px;background:linear-gradient(180deg,#f3faf5,#fff);box-shadow:0 8px 24px rgba(22,101,52,.08)}
@@ -775,6 +775,80 @@ function nextBookingForRoom(roomId,onDate=today()){
   return operationalAllocationsForRoom(roomId,onDate)
     .filter(t=>isUpcomingOccupancyStay(t,onDate))
     .sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')||Number(a.id)-Number(b.id))[0]||null;
+}
+/**
+ * Availability Vacancy / Find-Room summary — SAME operational allocation SoT as
+ * Calendar, Room Status, and Current/Upcoming (operationalAllocationsForRoom + occupancyInterval).
+ * Never invents a separate validity filter; never hides open-ended current occupants.
+ */
+function roomAvailabilitySummary(roomId,onDate=today(),horizonDays=90){
+  const allocs=operationalAllocationsForRoom(roomId,onDate)
+    .slice()
+    .sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||'')||Number(a.id)-Number(b.id));
+  const current=currentOccupantsForRoom(roomId,onDate);
+  const next=nextBookingForRoom(roomId,onDate);
+  const horizon=addDays(onDate,horizonDays)||onDate;
+  let availableAfterDate=null,availableAfterTime=null,openEndedCurrent=false;
+  if(current.length){
+    current.forEach(t=>{
+      const end=effectiveOccupancyEnd(t);
+      if(!end){openEndedCurrent=true;return;}
+      const tm=normalizeClock(t.check_out_time,'12:00');
+      if(!availableAfterDate||end>availableAfterDate||(end===availableAfterDate&&tm>(availableAfterTime||''))){
+        availableAfterDate=end;
+        availableAfterTime=tm;
+      }
+    });
+  }
+  // Free windows inside [onDate, horizon] using occupancyInterval half-open ends.
+  const windows=[];
+  allocs.forEach(t=>{
+    const iv=occupancyInterval(t);
+    if(!iv)return;
+    const start=iv.startDate;
+    const end=iv.endDate||(openEndedCurrent&&current.some(c=>Number(c.id)===Number(t.id))?'9999-12-31':null);
+    if(!end){
+      // Truly open-ended live stay: blocks from check-in onward.
+      windows.push({start,end:'9999-12-31',t,outTime:null,inTime:normalizeClock(t.check_in_time,'00:00')});
+      return;
+    }
+    if(end<=onDate)return;
+    if(start>=horizon)return;
+    windows.push({
+      start,
+      end,
+      t,
+      outTime:normalizeClock(t.check_out_time,'12:00'),
+      inTime:normalizeClock(t.check_in_time,'00:00'),
+    });
+  });
+  windows.sort((a,b)=>a.start.localeCompare(b.start)||a.end.localeCompare(b.end));
+  const slots=[];
+  let cursor=onDate;
+  for(const w of windows){
+    if(w.end<='9999-12-30'&&w.start>cursor){
+      const gapEnd=w.start;
+      if(gapEnd>cursor&&cursor<horizon)slots.push({from:cursor,to:gapEnd,untilTime:w.inTime||null});
+    }
+    if(w.end==='9999-12-31'){cursor='9999-12-31';break;}
+    if(w.end>cursor)cursor=w.end;
+  }
+  if(cursor<horizon&&cursor!=='9999-12-31')slots.push({from:cursor,to:horizon,untilTime:null});
+  return {
+    roomId:Number(roomId),
+    allocs,
+    current,
+    next,
+    availableAfterDate:openEndedCurrent?null:availableAfterDate,
+    availableAfterTime:openEndedCurrent?null:availableAfterTime,
+    openEndedCurrent,
+    slots,
+    horizon,
+  };
+}
+/** True when room has a conflict for [start,end) using the same overlap helper as Edit Stay / inspections. */
+function roomHasOccupancyConflict(roomId,start,end,opts={}){
+  return roomOccupiedOverlap(roomId,start,end,opts);
 }
 function stayActiveOn(t,onDate=today()){
   return isCurrentOccupancyStay(t,onDate);
@@ -3396,33 +3470,55 @@ function viewingPeopleLabel(v){
   const n=Number(v.people_count||1);
   return `${n} visitor${n===1?'':'s'}`;
 }
+function vacancyCardHtml(r,summary){
+  const cur=summary.current||[];
+  const next=summary.next;
+  const occupantNames=cur.map(t=>tenantBy(t.tenant_id)?.name||'Tenant');
+  const occLine=cur.length
+    ?`<div class="vacancy-occ">Current occupant: <b>${esc(occupantNames.join(' + '))}</b></div>`
+    :`<div class="vacancy-occ muted">Current occupant: Available / Vacant</div>`;
+  let outLine='';
+  if(cur.length){
+    if(summary.openEndedCurrent){
+      outLine=`<div class="vacancy-meta">Checkout: Ongoing (no end date)</div><div class="vacancy-meta">Available after: — (open-ended occupancy)</div>`;
+    }else if(summary.availableAfterDate){
+      const tm=summary.availableAfterTime?` ${esc(summary.availableAfterTime.slice(0,5))}`:'';
+      outLine=`<div class="vacancy-meta">Checkout: ${fmtDate(summary.availableAfterDate)}${tm}</div><div class="vacancy-meta">Available after: ${fmtDate(summary.availableAfterDate)}${tm}</div>`;
+    }
+  }
+  let nextLine='';
+  if(next){
+    const nm=tenantBy(next.tenant_id)?.name||paymentGroupName(next)||'Tenant';
+    const inT=next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:'';
+    nextLine=`<div class="vacancy-meta"><b>Next booking:</b> ${esc(nm)} at ${fmtDate(next.check_in)}${inT}</div>`;
+    if(summary.availableAfterDate&&next.check_in>summary.availableAfterDate){
+      nextLine+=`<div class="vacancy-meta">Available: ${fmtDate(summary.availableAfterDate)}${summary.availableAfterTime?` ${esc(summary.availableAfterTime.slice(0,5))}`:''} → ${fmtDate(next.check_in)}${inT}</div>`;
+    }else if(!cur.length){
+      nextLine+=`<div class="vacancy-meta">Available until next check-in: ${fmtDate(next.check_in)}${inT}</div>`;
+    }
+  }
+  const slotHtml=(summary.slots||[]).length
+    ?summary.slots.map(s=>`<div class="vacancy-slot">${fmtDate(s.from)} → ${fmtDate(s.to)}${s.untilTime?` ${esc(String(s.untilTime).slice(0,5))}`:''}</div>`).join('')
+    :(cur.length&&(summary.openEndedCurrent||!next)?`<div class="muted" style="margin-top:8px">No vacancy in the next 90 days.</div>`:'');
+  const openWarn=summary.openEndedCurrent
+    ?`<div class="error small" style="margin-top:8px">Open-ended occupancy — room is not free until a checkout date is set.</div>`
+    :'';
+  return `<div class="vacancy-card" data-vacancy-room="${r.id}"><h3>${esc(roomOptionLabel(r))}</h3>${occLine}${outLine}${nextLine}${slotHtml?`<div class="muted small" style="margin-top:10px">Free windows (90 days)</div>${slotHtml}`:''}${openWarn}${canEdit()?`<div class="room-actions"><button class="btn ghost book-viewing-room" data-room="${r.id}">Book inspection</button></div>`:''}</div>`;
+}
 function availabilityPage(){
-  const rooms=currentPropertyRooms(), roomIds=new Set(rooms.map(r=>Number(r.id)));
-  // Operational calendar SoT: property-scoped allocations only (never null-room cross-property leak).
-  const ts=scopedTenancies().filter(t=>t.room_id!=null&&roomIds.has(Number(t.room_id)));
+  const rooms=currentPropertyRooms();
   const startIso=today(), endIso=addDays(startIso,89);
   const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const switcher=`<div class="view-switch"><button class="${state.availabilityMode==='calendar'?'active':''}" data-amode="calendar">Calendar View</button><button class="${state.availabilityMode==='vacancy'?'active':''}" data-amode="vacancy">Vacancy View</button></div>`;
   const viewingLink=canEdit()?`<button type="button" class="btn ghost" id="goto-book-viewing">+ Book inspection</button>`:'';
   if(state.availabilityMode==='vacancy'){
-    const horizon=endIso;
-    const cards=rooms.map(r=>{
-      const all=ts.filter(t=>Number(t.room_id)===Number(r.id)&&t.check_in&&tenancyKind(t)!=='historical').sort((a,b)=>(a.check_in||'').localeCompare(b.check_in||''));
-      const indefinite=all.find(t=>t.check_in<=today()&&!t.check_out&&!t.confirmed_until);
-      if(indefinite)return '';
-      const stays=all.filter(t=>t.check_out||t.confirmed_until).map(t=>({s:t,start:t.check_in,end:t.check_out||t.confirmed_until})).sort((a,b)=>a.start.localeCompare(b.start));
-      let cursor=today(),slots=[];
-      for(const x of stays){if(x.end<today())continue;if(x.start>cursor)slots.push([cursor,x.start,x.s.check_in_time||null]);if(x.end>=cursor)cursor=x.end}
-      const futureIndef=all.find(t=>t.check_in>today()&&!t.check_out&&!t.confirmed_until);
-      const finalEnd=futureIndef?.check_in||horizon;
-      if(cursor<finalEnd)slots.push([cursor,finalEnd,futureIndef?.check_in_time||null]);
-      return `<div class="vacancy-card"><h3>${esc(roomOptionLabel(r))}</h3>${slots.length?slots.map(([a,b,time])=>`<div class="vacancy-slot">${fmtDate(a)} → ${fmtDate(b)}${time?` ${esc(time.slice(0,5))}`:''}</div>`).join(''):'<div class="muted">No vacancy in the next 90 days.</div>'}${futureIndef?`<div class="error small" style="margin-top:8px">Long-term occupancy begins ${fmtDate(futureIndef.check_in)}${futureIndef.check_in_time?` ${esc(futureIndef.check_in_time.slice(0,5))}`:''}; no vacancy is predicted after that.</div>`:''}${canEdit()?`<div class="room-actions"><button class="btn ghost book-viewing-room" data-room="${r.id}">Book inspection</button></div>`:''}</div>`;
-    }).join('');
-    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Only rooms with a genuine available period are shown. Long-term / ongoing rooms with no checkout date are excluded. Use <b>Inspections</b> to book times.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}</div></div>
+    const cards=rooms.map(r=>vacancyCardHtml(r,roomAvailabilitySummary(r.id,startIso,89))).join('');
+    return `<section class="panel"><div class="panel-head"><div><h2>Availability</h2><div class="muted small">Same operational occupancy source as Calendar / Room Status / Current. Shows current occupant, checkout, available-after, and next booking. Use <b>Inspections</b> to book times.</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${switcher}${viewingLink}</div></div>
       <div class="finder"><label>Check-in<input id="find-in" type="datetime-local"></label><label>Check-out<input id="find-out" type="datetime-local"></label><button id="find-room" class="btn primary">Find a room</button></div><div id="find-result" style="margin-top:12px"></div>
       <div class="room-grid" style="margin-top:18px">${cards}</div></section>`;
   }
   // Room × date matrix — iso keys are property-local YYYY-MM-DD (never toISOString UTC).
+  // Occupancy chips come from operationalAllocationsForRoom (same SoT as Room Status / Vacancy).
   const dates=[];
   for(let i=0;i<90;i++){
     const iso=addDays(startIso,i);
@@ -3435,8 +3531,8 @@ function availabilityPage(){
   });
   rooms.forEach(r=>{
     matrix+=`<div class="cal-cell room">${esc(roomShortName(r))}</div>`;
+    const roomTs=operationalAllocationsForRoom(r.id,startIso);
     dates.forEach(({iso,dow})=>{
-      const roomTs=dedupeRoomStayRows(ts.filter(t=>Number(t.room_id)===Number(r.id)));
       const active=roomTs.filter(t=>stayBlocksDate(t,iso));
       const arriving=roomTs.filter(t=>!isOperationallyClosed(t)&&t.check_in===iso);
       const departing=roomTs.filter(t=>{
@@ -3769,21 +3865,27 @@ function render(){
     const finder=$('#find-room');if(finder)finder.onclick=()=>{
     const a=$('#find-in').value,b=$('#find-out').value,res=$('#find-result');if(!a||!b||b<=a){res.innerHTML='<div class="error">Choose a valid check-in and check-out time.</div>';return}
     const inDate=a.slice(0,10), outDate=b.slice(0,10);
+    const inTime=(a.includes('T')?a.slice(11,16):null)||'00:00';
+    const outTime=(b.includes('T')?b.slice(11,16):null)||'12:00';
     const fmtRange=`${fmtDate(inDate)} → ${fmtDate(outDate)}`;
     const rooms=currentPropertyRooms();
     const fully=[], partial=[], blocked=[];
     rooms.forEach(r=>{
-      const overlaps=scopedTenancies().filter(t=>{
-        if(isOperationallyClosed(t))return false;
-        if(Number(t.room_id)!==Number(r.id)||!t.check_in)return false;
+      // Same conflict SoT as Edit Stay / inspections: roomOccupiedOverlap → occupancyInterval.
+      if(!roomOccupiedOverlap(r.id,inDate,outDate,{startTime:inTime,endTime:outTime})){
+        fully.push(r);
+        return;
+      }
+      // Partial: some days free inside the requested window (overlap but not fully covering).
+      const overlaps=operationalAllocationsForRoom(r.id).filter(t=>{
         const iv=occupancyInterval(t);
         if(!iv)return false;
-        const reqStart=new Date(a).getTime();
-        const reqEnd=new Date(b).getTime();
-        return intervalsOverlapMs(reqStart,reqEnd,iv.startMs,iv.endMs);
+        const reqStart=parseLocalDateTime(inDate,inTime,'00:00');
+        const reqEnd=parseLocalDateTime(outDate,outTime,'12:00');
+        if(!reqStart||!reqEnd)return false;
+        return intervalsOverlapMs(reqStart.getTime(),reqEnd.getTime(),iv.startMs,iv.endMs);
       });
-      if(!overlaps.length)fully.push(r);
-      else if(overlaps.every(t=>{
+      if(overlaps.every(t=>{
         const s=t.check_in, e=effectiveOccupancyEnd(t)||'9999-12-31';
         return !(s<=inDate && e>=outDate);
       })) partial.push(r);

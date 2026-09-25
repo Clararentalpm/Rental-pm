@@ -441,7 +441,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="invite-dialog"><form id="invite-form" class="dialog-body">
-  <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Owner only. The invited staff member will receive an email to set their password. If they do not receive it, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
+  <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Any authorised account holder can invite. The invitee receives an email to set their password. Stored role labels are for history only — all authorised holders get full app access. If they do not receive the email, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Email<input name="email" type="email" required></label>
     <label>Display name<input name="display_name"></label>
@@ -2888,8 +2888,40 @@ async function recreateActionForTenancy(t,note){
   if(id)await logActionHistory(id,'created','',`due ${v.due_date}`,'Recalculated after booking change');
 }
 
+/**
+ * Authorisation model (post full-access parity):
+ * - Unauthenticated → no private Rental PM access
+ * - Authenticated + profiles row → AUTHORISED ACCOUNT HOLDER → full Owner-level app access
+ * - Authenticated without profiles row → unauthorised (no private data)
+ * Stored roles (owner/manager/viewer) are labels for history/display only and must NOT
+ * gate modules, buttons, Staff Access, or destructive actions differently.
+ */
 function role(){return state.me?.role||'viewer'}
-function canEdit(){return ['owner','manager'].includes(role())}
+function isSignedIn(){return !!getSession()?.access_token}
+function authorisedProfileFor(userId){
+  if(!userId)return null;
+  return (state.profiles||[]).find(p=>String(p.id)===String(userId))||null;
+}
+function currentUserId(){return getSession()?.user?.id||null}
+function isAuthorisedAccountHolder(){
+  const sid=currentUserId();
+  if(sid)return !!authorisedProfileFor(sid);
+  // In-memory me already resolved from profiles (API still requires JWT).
+  if(state.me&&state.me.id!=null)return !!authorisedProfileFor(state.me.id);
+  // Legacy fixtures / transitional me without id: role label present + profiles loaded.
+  if(state.me&&state.me.role&&(state.profiles||[]).length)return true;
+  return false;
+}
+/** Full application access — same capability set historically reserved for Owner. */
+function hasFullAppAccess(){return isAuthorisedAccountHolder()}
+function canEdit(){return hasFullAppAccess()}
+function canManageStaff(){return hasFullAppAccess()}
+/** Deny private app use when signed-in but not in profiles (keeps auth, blocks data). */
+function denyUnauthorisedAccess(message){
+  $('#app').classList.add('hidden');
+  $('#boot').classList.add('hidden');
+  showAuth(message||'Your account is signed in but is not authorised for Rental PM. Ask an authorised account holder to invite you from Staff Access.','');
+}
 
 async function loadAll(){
   $('#sync').textContent='Syncing…';
@@ -2931,10 +2963,18 @@ async function loadAll(){
   });
   if(!state.properties.length)throw new Error(errs[0]||'No property data returned.');
   if(!state.propertyId||!state.properties.some(p=>Number(p.id)===Number(state.propertyId)))state.propertyId=state.properties[0].id;
-  const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
-  $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'viewer'}`;
+  const s=getSession();
+  const profile=(state.profiles||[]).find(p=>p.id===s?.user?.id)||null;
+  if(!profile){
+    // Authenticated JWT but no profiles row → not an authorised Rental PM account holder.
+    state.me=null;
+    denyUnauthorisedAccess();
+    return;
+  }
+  state.me=profile;
+  $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'account'} · full access`;
   $('#new-stay').classList.toggle('hidden',!canEdit());
-  // Owner/Manager only: non-destructive reconcile (no new payments created).
+  // Authorised holders: non-destructive reconcile (no new payments created).
   if(canEdit()){try{await softReconcileOpenActions()}catch(_){}}
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
@@ -3810,7 +3850,7 @@ function bondsPage(){
   const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
   return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
   <div class="tenant-tools"><div class="view-switch"><button class="${filter==='open'?'active':''}" data-bfilter="open">Open (${openRows.length})</button><button class="${filter==='closed'?'active':''}" data-bfilter="closed">Refunded / Closed (${closedRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${canEdit()?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
@@ -3818,13 +3858,13 @@ function pricingPage(){
   return `<section class="panel"><div class="panel-head"><h2>Price history</h2><span class="muted small">Changes made through Room Profiles are logged here.</span></div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Room</th><th>Price type</th><th>Old</th><th>New</th><th>Note</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${new Date(x.created_at).toLocaleString('en-AU')}</td><td>${esc(roomLabel(x.room_id))}</td><td>${esc(x.price_type)}</td><td>${esc(x.old_value||'—')}</td><td>${esc(x.new_value)}</td><td>${esc(x.note||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No price changes logged yet.</div>'}</section>`;
 }
 function staffPage(){
-  if(role()!=='owner')return'<section class="panel"><div class="empty">Only the owner can view Staff Access.</div></section>';
+  if(!canManageStaff())return'<section class="panel"><div class="empty">Authorised account required to view Staff Access.</div></section>';
   const myId=getSession()?.user?.id||'';
-  return `<section class="panel"><div class="panel-head"><div><h2>Staff access</h2><div class="muted small">Owner can invite, resend setup links, change roles, and remove sub-accounts.</div></div><button id="invite-staff" class="btn primary">+ Add / Invite staff</button></div>
-  <div class="table-wrap"><table><thead><tr><th>Name</th><th>User ID</th><th>Role</th><th>Actions</th></tr></thead><tbody>
-  ${state.profiles.map(p=>`<tr><td><b>${esc(p.display_name||'Staff')}</b>${p.id===myId?'<div class="muted small">Main Owner / current user</div>':''}</td><td class="mono small">${esc(p.id)}</td><td><select class="role-select" data-user="${esc(p.id)}" ${p.id===myId?'disabled':''}><option ${p.role==='owner'?'selected':''}>owner</option><option ${p.role==='manager'?'selected':''}>manager</option><option ${p.role==='viewer'?'selected':''}>viewer</option></select></td><td><div class="tenant-actions">${p.id!==myId?`<button class="btn ghost resend-staff" data-user="${esc(p.id)}">Resend link</button><button class="btn ghost reset-staff" data-user="${esc(p.id)}">Reset staff access</button><button class="btn danger delete-staff" data-user="${esc(p.id)}">Delete</button>`:'<span class="muted small">Protected</span>'}</div></td></tr>`).join('')}
+  return `<section class="panel"><div class="panel-head"><div><h2>Staff access</h2><div class="muted small">All authorised account holders have full app access (same as Owner). Role labels below are for history/display only and do not restrict permissions. Invite, resend setup links, change labels, or remove access.</div></div><button id="invite-staff" class="btn primary">+ Add / Invite staff</button></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>User ID</th><th>Role label</th><th>Actions</th></tr></thead><tbody>
+  ${state.profiles.map(p=>`<tr><td><b>${esc(p.display_name||'Staff')}</b>${p.id===myId?'<div class="muted small">Current signed-in account</div>':''}</td><td class="mono small">${esc(p.id)}</td><td><select class="role-select" data-user="${esc(p.id)}" ${p.id===myId?'disabled':''}><option ${p.role==='owner'?'selected':''}>owner</option><option ${p.role==='manager'?'selected':''}>manager</option><option ${p.role==='viewer'?'selected':''}>viewer</option></select></td><td><div class="tenant-actions">${p.id!==myId?`<button class="btn ghost resend-staff" data-user="${esc(p.id)}">Resend link</button><button class="btn ghost reset-staff" data-user="${esc(p.id)}">Reset staff access</button><button class="btn danger delete-staff" data-user="${esc(p.id)}">Delete</button>`:'<span class="muted small">Protected</span>'}</div></td></tr>`).join('')}
   </tbody></table></div>
-  <div class="note" style="margin-top:12px">Resend link sends a fresh setup/recovery email and returns the staff member to the Netlify Rental PM site. Repeated clicks are de-duplicated while a request is in progress. If the email provider temporarily rate-limits delivery, the staff account remains active and is not blocked.</div>
+  <div class="note" style="margin-top:12px">Resend link sends a fresh setup/recovery email. Repeated clicks are de-duplicated while a request is in progress. If the email provider temporarily rate-limits delivery, the staff account remains active and is not blocked. Passwords, JWTs and service-role keys are never shown here.</div>
   </section>`;
 }
 function historyPage(){
@@ -4602,7 +4642,7 @@ async function deletePayment(id){
   }catch(e){alert(e.message)}
 }
 async function deleteBond(id){
-  if(role()!=='owner'){alert('Owner permission is required to delete bond / deposit history.');return}
+  if(!canEdit()){alert('Authorised account required to delete bond / deposit history.');return}
   const b=state.bonds.find(x=>Number(x.id)===Number(id));
   if(!b)return;
   const hist=(state.bondRefundEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length + (state.bondEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length;
@@ -4894,9 +4934,9 @@ function openRoom(id){
 }
 
 async function deleteStaff(userId){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const p=state.profiles.find(x=>x.id===userId);if(!p)return;
-  if(userId===getSession()?.user?.id){alert('Your Main Owner account is protected and cannot be deleted here.');return}
+  if(userId===getSession()?.user?.id){alert('Your own account is protected and cannot be deleted here.');return}
   if(!confirm(`Delete staff access for ${p.display_name||'this user'}? They will lose Rental PM access.`))return;
   try{
     const s=getSession();
@@ -4907,13 +4947,13 @@ async function deleteStaff(userId){
 }
 let resendBusy={};
 async function resetStaffAccess(button){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const userId=button.dataset.user,p=state.profiles.find(x=>x.id===userId);if(!p)return;
   if(!confirm(`Reset sign-in access for ${p.display_name||'this staff member'}? A fresh password setup email will be requested. Their staff record will not be deleted.`))return;
   await resendStaffLink(button);
 }
 async function resendStaffLink(button){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const userId=button.dataset.user;if(resendBusy[userId])return;
   const p=state.profiles.find(x=>x.id===userId);if(!p)return;
   if(!confirm(`Send a fresh setup link to ${p.display_name||'this staff member'}?`))return;
@@ -4935,8 +4975,9 @@ async function resendStaffLink(button){
   }
 }
 async function changeRole(user,value){
-  if(user===getSession()?.user?.id && value!=='owner' && role()==='owner'){if(!confirm('This would remove your own owner role. Continue?')){render();return}}
-  try{await patch('profiles',`id=eq.${encodeURIComponent(user)}`,{role:value});toast('Staff role updated');await loadAll()}catch(e){alert(e.message);await loadAll()}
+  if(!canManageStaff())return;
+  if(user===getSession()?.user?.id && value!==(state.me?.role||'owner')){if(!confirm('This changes your own role label only (permissions stay full access for authorised holders). Continue?')){render();return}}
+  try{await patch('profiles',`id=eq.${encodeURIComponent(user)}`,{role:value});toast('Staff role label updated');await loadAll()}catch(e){alert(e.message);await loadAll()}
 }
 
 
@@ -5737,11 +5778,12 @@ $('#bond-action-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#invite-form').onsubmit=async e=>{
-  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#invite-error'),note=$('#invite-note');err.classList.add('hidden');note.classList.add('hidden');
+  e.preventDefault();if(!canManageStaff()){alert('Authorised account required to invite staff.');return}
+  const f=e.currentTarget,fd=new FormData(f),err=$('#invite-error'),note=$('#invite-note');err.classList.add('hidden');note.classList.add('hidden');
   try{
     const s=getSession();const r=await fetch(`${SB_URL}/functions/v1/rental-invite-staff`,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:`Bearer ${s?.access_token||''}`},body:JSON.stringify({email:fd.get('email'),display_name:fd.get('display_name'),role:fd.get('role'),redirect_to:CANONICAL_URL})});
     const body=await r.json();if(!r.ok)throw new Error(body.error||`Invite failed (${r.status})`);
-    note.textContent='Invite sent. The staff member can use the email link to set their password.';note.classList.remove('hidden');f.reset();await loadAll();
+    note.textContent='Invite sent. The staff member can use the email link to set their password. All authorised accounts receive full app access.';note.classList.remove('hidden');f.reset();await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 
@@ -5795,7 +5837,11 @@ $('#setpw').onclick=async()=>{
 async function start(){
   if(parseRecovery())return;
   const s=getSession();if(!s?.access_token){showAuth();return}
-  try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){if(/token|jwt|session|signed in|refresh/i.test(e.message)){clearSession();showAuth('Your previous session expired. Please sign in again.','')}else fatal(e.message)}
+  try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){
+    if(/token|jwt|session|signed in|refresh|Not signed in/i.test(e.message)){clearSession();showAuth('Your previous session expired. Please sign in again.','')}
+    else if(/not authorised|unauthorized|unauthorised/i.test(e.message)){denyUnauthorisedAccess(e.message)}
+    else fatal(e.message)
+  }
 }
 start();
 </script>

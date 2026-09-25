@@ -571,7 +571,31 @@ function isSofaRoom(r){
   return false;
 }
 function roomShortName(r){if(!r)return'Unassigned';return isSofaRoom(r)?'Sofa':`Room ${r.room_no}`}
-function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&r.ensuite)?`${n} · Ensuite`:n}
+/**
+ * Canonical Carindale ensuite configuration (owner-confirmed repeatedly):
+ *   Room 3 = Ensuite
+ *   Room 4 = NOT Ensuite
+ * McGregor and other properties keep rooms.ensuite as stored.
+ * Source of display/logic truth for ensuite badges and room pickers.
+ */
+function isCarindaleProperty(p=property()){return /carindale/i.test(String(p?.name||''))}
+function canonicalCarindaleEnsuite(roomNo){
+  const n=Number(roomNo);
+  if(n===3)return true;
+  if(n===4)return false;
+  return null;
+}
+/** Effective ensuite flag — never trust a stale Carindale R3/R4 rooms.ensuite row alone. */
+function roomIsEnsuite(r){
+  if(!r||isSofaRoom(r))return false;
+  const prop=propertyBy(r.property_id);
+  if(isCarindaleProperty(prop)){
+    const canon=canonicalCarindaleEnsuite(r.room_no);
+    if(canon!==null)return canon;
+  }
+  return !!r.ensuite;
+}
+function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&roomIsEnsuite(r))?`${n} · Ensuite`:n}
 function roomChipLabel(r){if(!r)return'Other';return isSofaRoom(r)?'Sofa':`R${r.room_no}`}
 function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';const prop=propertyBy(r.property_id)?.name||'';return `${prop} ${roomShortName(r)}`.trim()}
 /**
@@ -597,6 +621,41 @@ function compareRoomsNatural(a,b){
 function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort(compareRoomsNatural)}
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
+/**
+ * Persist canonical Carindale ensuite flags when stored rows drift.
+ * Updates rooms.ensuite only — never tenancies, payments, or bonds.
+ * Returns list of room ids corrected (in-memory + remote when patch succeeds).
+ */
+async function reconcileCarindaleEnsuiteFlags(){
+  const corrected=[];
+  const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
+  for(const p of props){
+    const rooms=(state.rooms||[]).filter(r=>Number(r.property_id)===Number(p.id));
+    for(const r of rooms){
+      const want=canonicalCarindaleEnsuite(r.room_no);
+      if(want===null)continue;
+      if(!!r.ensuite===want)continue;
+      try{
+        await patch('rooms',`id=eq.${r.id}`,{ensuite:want});
+        r.ensuite=want;
+        corrected.push(Number(r.id));
+        // Align bathroom_type label on profile when it clearly contradicts ensuite flag.
+        const rp=(state.roomProfiles||[]).find(x=>Number(x.room_id)===Number(r.id));
+        if(rp){
+          const bt=String(rp.bathroom_type||'');
+          if(want&&!/ensuite/i.test(bt)){
+            await patch('room_profiles',`room_id=eq.${r.id}`,{bathroom_type:'Ensuite'}).catch(()=>{});
+            rp.bathroom_type='Ensuite';
+          }else if(!want&&/^ensuite$/i.test(bt.trim())){
+            await patch('room_profiles',`room_id=eq.${r.id}`,{bathroom_type:'Shared'}).catch(()=>{});
+            rp.bathroom_type='Shared';
+          }
+        }
+      }catch(_){/* keep going — display still uses roomIsEnsuite */}
+    }
+  }
+  return corrected;
+}
 /**
  * Stable property for a stay: room.property_id (source of truth).
  * Never infer property from room-name text. Unassigned room_id ⇒ not on any property tab.
@@ -2976,6 +3035,8 @@ async function loadAll(){
   $('#new-stay').classList.toggle('hidden',!canEdit());
   // Authorised holders: non-destructive reconcile (no new payments created).
   if(canEdit()){try{await softReconcileOpenActions()}catch(_){}}
+  // Room-config only: Carindale R3 ensuite / R4 not ensuite (never touches stays/payments/bonds).
+  if(canEdit()){try{await reconcileCarindaleEnsuiteFlags()}catch(_){}}
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }
@@ -3219,7 +3280,7 @@ function overviewPage(){
     const nextLine=next
       ?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}${next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:''}<div class="muted small">Upcoming booking</div></div>`
       :'';
-    return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+    return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(roomIsEnsuite(r)?'<span class="badge ensuite">Ensuite</span>':'')}</div>
       <div class="muted small">${cur.length?'Current occupant':'Status'}</div>
       <div class="occupant">${occupantLabel}</div>
       <div class="subline">${rentLine}</div>
@@ -3392,7 +3453,7 @@ function roomsPage(){
     const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
     const extraRoom=getExtraRoomFee(p);
     const note=displayPricingNote(p);
-    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(roomIsEnsuite(r)?'<span class="badge ensuite">Ensuite</span>':'')}</div>
     <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
     <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd>
     <dt>Extra room</dt><dd>${extraRoom!==''?`${money(extraRoom)} / day`:'—'}</dd>
@@ -4924,7 +4985,7 @@ async function setBondRefundedStatus(id,refunded){
 function openRoom(id){
   const r=roomBy(id),p=state.roomProfiles.find(x=>Number(x.room_id)===Number(id))||{},f=$('#room-form');f.reset();f.elements.room_id.value=id;$('#room-dialog-name').textContent=roomLabel(id);
   ['room_type','capacity','bathroom_type','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','short_stay_unit','extra_bed_fee','amenities'].forEach(k=>{if(f.elements[k])f.elements[k].value=p[k]??''});
-  if(f.elements.ensuite) f.elements.ensuite.checked=!!r.ensuite;
+  if(f.elements.ensuite) f.elements.ensuite.checked=roomIsEnsuite(r);
   if(f.elements.extra_room_fee)f.elements.extra_room_fee.value=getExtraRoomFee(p);
   if(f.elements.pricing_note)f.elements.pricing_note.value=displayPricingNote(p);
   // Sensible defaults when empty (owner can change before save)
@@ -5404,7 +5465,16 @@ $('#room-form').onsubmit=async e=>{
   row.updated_at=new Date().toISOString();
   try{
     if(f.elements.ensuite){
-      await patch('rooms',`id=eq.${id}`,{ensuite:!!f.elements.ensuite.checked});
+      const room=roomBy(id);
+      let ensuiteFlag=!!f.elements.ensuite.checked;
+      // Carindale Room 3/4 cannot drift from canonical config via the form.
+      if(room&&isCarindaleProperty(propertyBy(room.property_id))){
+        const canon=canonicalCarindaleEnsuite(room.room_no);
+        if(canon!==null)ensuiteFlag=canon;
+      }
+      await patch('rooms',`id=eq.${id}`,{ensuite:ensuiteFlag});
+      if(room)room.ensuite=ensuiteFlag;
+      if(f.elements.ensuite)f.elements.ensuite.checked=ensuiteFlag;
     }
     await patch('room_profiles',`room_id=eq.${id}`,row);
     for(const k of ['standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','extra_bed_fee']){

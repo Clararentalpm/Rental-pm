@@ -246,10 +246,14 @@ check('UI markers', () => {
 });
 
 check('Carindale SQL', () => {
-  const sql = fs.readFileSync(path.join(__dirname, 'supabase_carindale_room4_ensuite_fix.sql'), 'utf8');
-  assert(/ensuite\s*=\s*false/i.test(sql), 'ensuite false');
+  const sql = fs.readFileSync(path.join(__dirname, 'supabase_carindale_ensuite_rooms_fix.sql'), 'utf8');
+  assert(/room_no\s*=\s*3/i.test(sql) && /ensuite\s*=\s*true/i.test(sql), 'room 3 ensuite');
+  assert(/room_no\s*=\s*4/i.test(sql) && /ensuite\s*=\s*false/i.test(sql), 'room 4 not ensuite');
   assert(/Carindale/i.test(sql), 'carindale');
   assert(/McGregor/i.test(sql), 'mcgregor');
+  const legacy = fs.readFileSync(path.join(__dirname, 'supabase_carindale_room4_ensuite_fix.sql'), 'utf8');
+  assert(/ensuite\s*=\s*false/i.test(legacy), 'legacy room4 false');
+  assert(/room_no\s*=\s*3/i.test(legacy), 'legacy also sets room 3');
 });
 
 check('Black Gun checkout day', () => {

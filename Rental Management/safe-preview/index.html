@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Rental PM</title>
+<title>SAFE PREVIEW — Rental PM (PR #28)</title>
 <style>
 :root{
   --bg:#f3f6fa;--panel:#fff;--ink:#182230;--muted:#667085;--line:#e4e7ec;
@@ -84,6 +84,13 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 @media(max-width:950px){.alert-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:760px){.calendar90{grid-template-columns:repeat(7,minmax(125px,1fr));min-width:875px}.panel:has(.calendar90){overflow:auto}}
 @media(max-width:650px){body{font-size:16px}.content{gap:14px}.panel{padding:16px}.metric{min-height:auto}.btn{min-height:42px}.app{display:block}.sidebar{position:fixed;left:0;right:0;top:auto;bottom:0;width:auto;height:auto;z-index:20;padding:7px}.side-brand,.side-bottom{display:none}.nav{grid-template-columns:repeat(4,1fr)}.nav button{font-size:10px!important;text-align:center;padding:8px 2px}.topbar{padding:14px;align-items:flex-start}.content{padding:14px 14px 88px}.metrics,.room-grid,.price-grid,.alert-grid,.form-grid{grid-template-columns:1fr}.actions .sync{display:none}}
+
+.safe-preview-banner{position:sticky;top:0;z-index:9999;background:#7a2e0b;color:#fff7ed;padding:12px 16px;font-size:13px;line-height:1.45;border-bottom:3px solid #c2410c;box-shadow:0 8px 24px #00000033}
+.safe-preview-banner b{color:#fff}
+.safe-preview-banner code{background:#00000033;padding:1px 6px;border-radius:6px}
+.safe-preview-banner .safe-grid{display:grid;gap:6px;max-width:1100px;margin:0 auto}
+@media (max-width:720px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.topbar{padding:14px 16px}.content{padding:14px 16px 40px}.room-grid,.metrics,.alert-grid,.price-grid{grid-template-columns:1fr 1fr}.calendar90{grid-template-columns:repeat(7,minmax(72px,1fr))}.finder{grid-template-columns:1fr}}
+
 </style>
 <style>
 .tenant-tools{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:16px 0;flex-wrap:wrap}.search-input{min-width:320px;max-width:580px;height:44px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font-size:15px;background:#fff}.income-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:18px 0 24px}.income-kpis .metric{min-height:118px}.income-kpis .metric:first-child{border-top:4px solid var(--green)}table th{white-space:nowrap;background:#f8fafc}table td,table th{vertical-align:middle}.panel-head h2,.panel-head h3{margin:0}@media(max-width:1100px){.income-kpis{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.income-kpis{grid-template-columns:1fr}.search-input{min-width:100%;width:100%}}
@@ -120,6 +127,16 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 .journey-segments div{margin-top:2px}
 </style></head>
 <body>
+
+<div class="safe-preview-banner" role="status">
+  <div class="safe-grid">
+    <div><b>SAFE MANUAL PREVIEW (PR #28 Carindale ensuite)</b> — for iPad visual checks only.</div>
+    <div><b>Data source:</b> in-browser <b>TEST DATA</b> only. <b>Does NOT connect to production Supabase.</b> No production Auth, REST, SQL, or Edge Function calls.</div>
+    <div><b>Save:</b> Save / Edit / Book / Delete update <b>test data in this browser only</b>. They cannot change production. Soft-reconcile writes are disabled.</div>
+    <div><b>Not covered here:</b> your live production bookings / real McGregor multi-room rows. Those need a separate production read — this preview intentionally avoids that.</div>
+  </div>
+</div>
+
 <div id="boot" class="boot"><div style="display:flex;align-items:center;gap:14px"><div class="spinner"></div><div><strong>Starting Rental PM…</strong><div class="muted small">This screen will not stay stuck indefinitely.</div></div></div></div>
 
 <section id="auth" class="auth-shell hidden">
@@ -455,8 +472,146 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 <div id="toast" class="toast hidden"></div>
 
 <script>
-const SB_URL='https://odezjuvqmnkzmcnezoyq.supabase.co';
-const SB_KEY='sb_publishable_iQCs8hCyYIysIUykBFBBDQ_O34chdHQ';
+
+/* ===== SAFE MANUAL PREVIEW SHIM (generated — do not use in production deploy) ===== */
+const SAFE_MANUAL_PREVIEW = true;
+const SAFE_PREVIEW_NO_NETWORK = true;
+document.title = 'SAFE PREVIEW — Rental PM (PR #28)';
+
+function safePreviewBlocked(action){
+  const msg = 'Blocked in SAFE PREVIEW: '+action+'. This preview does not connect to production Supabase.';
+  console.warn(msg);
+  try{toast(msg)}catch(_){}
+  return Promise.reject(new Error(msg));
+}
+
+function safePreviewFixture(){
+  const todayISO = (typeof today==='function'?today():'2026-09-26');
+  const in7 = (typeof addDays==='function'?addDays(todayISO,7):'2026-10-03');
+  const in14 = (typeof addDays==='function'?addDays(todayISO,14):'2026-10-10');
+  const in21 = (typeof addDays==='function'?addDays(todayISO,21):'2026-10-17');
+  const gid = 'preview-mcg-multi-001';
+  return {
+    propertyId: 2,
+    page: 'rooms',
+    availabilityMode: 'vacancy',
+    properties: [
+      { id: 1, name: 'McGregor', timezone: 'Australia/Brisbane' },
+      { id: 2, name: 'Carindale', timezone: 'Australia/Brisbane' }
+    ],
+    // Intentionally WRONG stored Carindale flags — UI must still show canonical R3 ensuite / R4 not.
+    rooms: [
+      { id: 101, property_id: 1, room_no: 1, ensuite: false, notes: '' },
+      { id: 102, property_id: 1, room_no: 2, ensuite: false, notes: '' },
+      { id: 103, property_id: 1, room_no: 3, ensuite: false, notes: '' },
+      { id: 104, property_id: 1, room_no: 4, ensuite: true, notes: '' },
+      { id: 105, property_id: 1, room_no: 5, ensuite: false, notes: '' },
+      { id: 106, property_id: 1, room_no: 6, ensuite: false, notes: 'Sofa / Extra Room' },
+      { id: 201, property_id: 2, room_no: 1, ensuite: false, notes: '' },
+      { id: 202, property_id: 2, room_no: 2, ensuite: false, notes: '' },
+      { id: 203, property_id: 2, room_no: 3, ensuite: false, notes: '' }, // wrong stored — should display Ensuite
+      { id: 204, property_id: 2, room_no: 4, ensuite: true, notes: '' },  // wrong stored — should NOT display Ensuite
+      { id: 205, property_id: 2, room_no: 5, ensuite: false, notes: '' }
+    ],
+    roomProfiles: [
+      { room_id: 101, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 200, standard_price: 200 },
+      { room_id: 102, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 200, standard_price: 200 },
+      { room_id: 103, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 210, standard_price: 210 },
+      { room_id: 104, room_type: 'Standard', bathroom_type: 'Ensuite', beds: 1, capacity: 1, current_asking_price: 230, standard_price: 230 },
+      { room_id: 105, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 200, standard_price: 200 },
+      { room_id: 106, room_type: 'Sofa / Extra room', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 25, standard_price: 25, extra_room_fee: 25 },
+      { room_id: 201, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 220, standard_price: 220 },
+      { room_id: 202, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 220, standard_price: 220 },
+      { room_id: 203, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 250, standard_price: 250 }, // wrong — display Ensuite
+      { room_id: 204, room_type: 'Standard', bathroom_type: 'Ensuite', beds: 1, capacity: 1, current_asking_price: 240, standard_price: 240 }, // wrong — display Shared
+      { room_id: 205, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 220, standard_price: 220 }
+    ],
+    tenants: [
+      { id: 1, name: 'Preview Guest Carindale', contact_method: 'preview.carindale@example.test', notes: 'TEST DATA' },
+      { id: 2, name: 'Preview Guest McGregor Multi', contact_method: 'preview.mcgregor@example.test', notes: 'TEST DATA multi-room' },
+      { id: 3, name: 'Preview Guest Carindale R5', contact_method: 'preview.r5@example.test', notes: 'TEST DATA' }
+    ],
+    tenancies: [
+      {
+        id: 501, tenant_id: 1, room_id: 203, property_id: 2,
+        check_in: todayISO, check_out: in14, status: 'active', tenancy_type: 'short_stay',
+        weekly_rent: 250, notes: 'TEST DATA — Carindale Room 3 current booking'
+      },
+      {
+        id: 502, tenant_id: 3, room_id: 205, property_id: 2,
+        check_in: in7, check_out: in21, status: 'upcoming', tenancy_type: 'short_stay',
+        weekly_rent: 220, notes: 'TEST DATA — Carindale Room 5 upcoming'
+      },
+      {
+        id: 601, tenant_id: 2, room_id: 102, property_id: 1,
+        check_in: todayISO, check_out: in7, status: 'active', tenancy_type: 'short_stay',
+        weekly_rent: 200, notes: 'BOOKING_GROUP:'+gid+'\nSEGMENT_INDEX:1\nSEGMENT_COUNT:2\nTEST DATA — McGregor multi-room seg 1 (Room 2)'
+      },
+      {
+        id: 602, tenant_id: 2, room_id: 105, property_id: 1,
+        check_in: in7, check_out: in14, status: 'upcoming', tenancy_type: 'short_stay',
+        weekly_rent: 200, notes: 'BOOKING_GROUP:'+gid+'\nSEGMENT_INDEX:2\nSEGMENT_COUNT:2\nTEST DATA — McGregor multi-room seg 2 (Room 5)'
+      }
+    ],
+    bonds: [],
+    payments: [],
+    profiles: [{ id: 'safe-preview-user', display_name: 'Safe Preview Tester', role: 'owner' }],
+    me: { id: 'safe-preview-user', display_name: 'Safe Preview Tester', role: 'owner' },
+    priceHistory: [],
+    activity: [],
+    bondEvents: [],
+    bondRefundEvents: [],
+    viewings: [
+      {
+        id: 1, property_id: 2, room_id: 204, visitor_name: 'Preview Inspector',
+        inspection_date: in7, inspection_time: '11:00', status: 'scheduled',
+        notes: 'TEST DATA — inspection on Carindale Room 4 (should NOT show Ensuite in picker label)'
+      }
+    ],
+    viewingsError: '',
+    paymentActions: [],
+    paymentActionHistory: [],
+    bookingEvents: [],
+    paymentActionsError: ''
+  };
+}
+
+function applySafePreviewNetworkGuards(){
+  const origFetch = window.fetch.bind(window);
+  window.fetch = function(input, init){
+    const url = String(input&&input.url?input.url:input);
+    const method = String((init&&init.method)||(input&&input.method)||'GET').toUpperCase();
+    if(/supabase\.co|functions\/v1/i.test(url)){
+      return safePreviewBlocked(method+' '+url);
+    }
+    return origFetch(input, init);
+  };
+  // Override low-level API helpers after they are defined — start() is replaced below.
+}
+
+function bootSafePreview(){
+  clearTimeout(window.__bootTimer);
+  Object.assign(state, safePreviewFixture());
+  // Fake session so UI helpers that read getSession() do not crash; never sent to network.
+  saveSession({
+    access_token: 'safe-preview-local-only',
+    refresh_token: '',
+    expires_at: Math.floor(Date.now()/1000)+86400,
+    user: { id: 'safe-preview-user', email: 'safe-preview@example.test' }
+  });
+  $('#me').textContent = 'Safe Preview Tester · test data · full access (local)';
+  $('#sync').textContent = 'TEST DATA (no Supabase)';
+  $('#new-stay').classList.toggle('hidden', !canEdit());
+  showApp();
+  renderChrome();
+  render();
+  toast('Safe preview ready — test data only, no production Supabase');
+}
+
+/* ===== end SAFE MANUAL PREVIEW SHIM head ===== */
+
+const SB_URL='https://safe-preview.invalid'; // production host neutralized
+const SB_KEY='safe-preview-no-key';
 const STORE='rental-pm-v6-session';
 const CANONICAL_URL='https://clararentalpm.github.io/Rental-pm/';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -536,7 +691,7 @@ function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
 function clearSession(){localStorage.removeItem(STORE)}
 function timeout(ms=12000){const c=new AbortController(),id=setTimeout(()=>c.abort(),ms);return{c,done:()=>clearTimeout(id)}}
 async function parse(r){const text=await r.text();let b={};try{b=text?JSON.parse(text):{}}catch{b={message:text}}if(!r.ok)throw new Error(b.msg||b.message||b.error_description||b.error||`Request failed (${r.status})`);return b}
-async function raw(path,opts={},auth=true){
+let raw = async function(path,opts={},auth=true){
   let s=getSession(); const t=timeout();
   try{
     const headers={apikey:SB_KEY,'Content-Type':'application/json',...(opts.headers||{})};
@@ -544,12 +699,12 @@ async function raw(path,opts={},auth=true){
     return await parse(await fetch(SB_URL+path,{...opts,headers,signal:t.c.signal}));
   }catch(e){if(e.name==='AbortError')throw new Error('Request timed out. Please wait and retry once.');throw e}finally{t.done()}
 }
-async function signIn(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
-async function refreshSession(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
-async function api(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
-const select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
-const insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
-const patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+let signIn = async function(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
+let refreshSession = async function(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
+let api = async function(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
+let select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
+let insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+let patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
 
 function showAuth(msg='',err=''){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#app').classList.add('hidden');$('#fatal').classList.add('hidden');$('#auth').classList.remove('hidden');$('#auth-msg').textContent=msg;$('#auth-msg').classList.toggle('hidden',!msg);$('#auth-err').textContent=err;$('#auth-err').classList.toggle('hidden',!err)}
 function showApp(){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#auth').classList.add('hidden');$('#fatal').classList.add('hidden');$('#app').classList.remove('hidden')}
@@ -661,7 +816,7 @@ function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.n
  * Room-config only — never tenancies, payments, or bonds.
  * Runs even when rooms.ensuite is already correct but bathroom_type contradicts.
  */
-async function reconcileCarindaleEnsuiteFlags(){
+let reconcileCarindaleEnsuiteFlags = async function(){
   const corrected=[];
   const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
   for(const p of props){
@@ -2767,7 +2922,7 @@ function findConfidentExistingPayment(a){
  * - link existing rent_payments when confidently matched
  * - NEVER create a rent_payment
  */
-async function softReconcileOpenActions(){
+let softReconcileOpenActions = async function(){
   if(state.paymentActionsError)return {updated:0,linked:0};
   if(!canEdit())return {updated:0,linked:0};
   const open=(state.paymentActions||[]).filter(a=>['open','due_soon','overdue','partially_paid'].includes(String(a.status||'').toLowerCase()));
@@ -3019,7 +3174,7 @@ function denyUnauthorisedAccess(message){
   showAuth(message||'Your account is signed in but is not authorised for Rental PM. Ask an authorised account holder to invite you from Staff Access.','');
 }
 
-async function loadAll(){
+let loadAll = async function(){
   $('#sync').textContent='Syncing…';
   const req=[
     select('properties','select=*&order=id'),
@@ -5954,7 +6109,7 @@ $('#setpw').onclick=async()=>{
   try{await raw('/auth/v1/user',{method:'PUT',body:JSON.stringify({password:p1})},true);$('#auth').classList.add('hidden');showApp();await loadAll();toast('Account activated — welcome to Rental PM')}catch(e){$('#reset-err').textContent=e.message;$('#reset-err').classList.remove('hidden')}finally{b.disabled=false;if(!$('#auth').classList.contains('hidden'))b.textContent='Save password'}
 };
 
-async function start(){
+let start = async function(){
   if(parseRecovery())return;
   const s=getSession();if(!s?.access_token){showAuth();return}
   try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){
@@ -5963,6 +6118,128 @@ async function start(){
     else fatal(e.message)
   }
 }
+;
+/* ===== SAFE MANUAL PREVIEW: replace network + start ===== */
+(function applySafePreviewOverrides(){
+  if(!SAFE_MANUAL_PREVIEW)return;
+
+  raw = async function(path, opts={}, auth=true){
+    return safePreviewBlocked('Supabase raw '+(opts.method||'GET')+' '+path);
+  };
+  signIn = async function(){ return safePreviewBlocked('signIn'); };
+  refreshSession = async function(){ return safePreviewBlocked('refreshSession'); };
+  api = async function(table, query='', opts={}){
+    const method = String(opts.method||'GET').toUpperCase();
+    if(method==='GET'){
+      // No production reads — callers should use in-memory state in preview.
+      return [];
+    }
+    return safePreviewBlocked(method+' '+table+(query?('?'+query):''));
+  };
+  select = (t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
+  insert = async function(t,row){
+    // Local-only mutation for Save/Edit UX checks — never hits network.
+    const tableMap = {
+      room_profiles: 'roomProfiles',
+      rooms: 'rooms',
+      tenants: 'tenants',
+      tenancies: 'tenancies',
+      bonds: 'bonds',
+      rent_payments: 'payments',
+      room_viewings: 'viewings',
+      payment_actions: 'paymentActions'
+    };
+    const key = tableMap[t];
+    if(!key){
+      toast('Local test insert skipped for '+t);
+      return [{...row,id:Date.now()}];
+    }
+    const id = row.id || (Math.max(0,...(state[key]||[]).map(x=>Number(x.id)||0))+1);
+    const saved = {...row,id};
+    state[key] = [...(state[key]||[]), saved];
+    toast('Saved to TEST DATA only ('+t+')');
+    return [saved];
+  };
+  patch = async function(t, filter, row){
+    const tableMap = {
+      room_profiles: 'roomProfiles',
+      rooms: 'rooms',
+      tenants: 'tenants',
+      tenancies: 'tenancies',
+      bonds: 'bonds',
+      rent_payments: 'payments',
+      room_viewings: 'viewings',
+      payment_actions: 'paymentActions',
+      profiles: 'profiles'
+    };
+    const key = tableMap[t];
+    if(!key){
+      toast('Local test patch skipped for '+t);
+      return [row];
+    }
+    const m = String(filter||'').match(/(?:^|&)(?:id|room_id)=eq\.(\d+|[^&]+)/);
+    const idRaw = m?m[1]:null;
+    const idField = /room_id=eq/.test(String(filter))?'room_id':'id';
+    state[key] = (state[key]||[]).map(item=>{
+      if(idRaw!=null && String(item[idField])===String(idRaw)) return {...item,...row};
+      return item;
+    });
+    // Also allow id=eq on rooms when patching ensuite
+    if(t==='rooms' && idRaw!=null){
+      state.rooms = state.rooms.map(item=>String(item.id)===String(idRaw)?{...item,...row}:item);
+    }
+    toast('Updated TEST DATA only ('+t+')');
+    return [{...row}];
+  };
+
+  reconcileCarindaleEnsuiteFlags = async function(){
+    // Apply canonical bathroom/ensuite fixes in MEMORY only — no production PATCH.
+    const corrected=[];
+    const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
+    for(const p of props){
+      const rooms=(state.rooms||[]).filter(r=>Number(r.property_id)===Number(p.id));
+      for(const r of rooms){
+        const want=canonicalCarindaleEnsuite(r.room_no);
+        if(want===null)continue;
+        let touched=false;
+        if(!!r.ensuite!==want){ r.ensuite=want; touched=true; }
+        const rp=(state.roomProfiles||[]).find(x=>Number(x.room_id)===Number(r.id));
+        if(rp){
+          const next=carindaleBathroomTypeToPersist(r,rp.bathroom_type);
+          const cur=rp.bathroom_type==null||rp.bathroom_type===''?null:String(rp.bathroom_type);
+          const normNext=next==null||next===''?null:String(next);
+          if(normNext!==cur&&!(normNext==null&&(cur==null||cur===''))){
+            rp.bathroom_type=normNext;
+            touched=true;
+          }
+        }
+        if(touched)corrected.push(Number(r.id));
+      }
+    }
+    if(corrected.length)toast('Preview reconcile (memory only): rooms '+corrected.join(', '));
+    return corrected;
+  };
+
+  softReconcileOpenActions = async function(){ return; };
+
+  loadAll = async function(){
+    $('#sync').textContent='TEST DATA (no Supabase)';
+    // Keep fixture / local mutations; do not fetch.
+    if(!state.me)state.me={id:'safe-preview-user',display_name:'Safe Preview Tester',role:'owner'};
+    $('#me').textContent=`${state.me.display_name||'Staff'} · test data · full access (local)`;
+    $('#new-stay').classList.toggle('hidden',!canEdit());
+    if(canEdit()){try{await reconcileCarindaleEnsuiteFlags()}catch(_){}}
+    renderChrome();render();
+  };
+
+  start = async function(){
+    applySafePreviewNetworkGuards();
+    bootSafePreview();
+    if(canEdit()){try{await reconcileCarindaleEnsuiteFlags();render()}catch(_){}}
+  };
+})();
 start();
+/* ===== end SAFE MANUAL PREVIEW overrides ===== */
+
 </script>
 </body></html>

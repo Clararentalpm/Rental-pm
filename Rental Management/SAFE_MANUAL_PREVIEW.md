@@ -15,15 +15,14 @@
 
 ## Preview URL
 
-**Live HTTPS (iPad, while this cloud agent tunnel is up):**  
+**iPad HTTPS preview (primary):**  
 https://slots-roger-scripting-growing.trycloudflare.com/
 
-**Durable GitHub CDN copy (after this preview branch is pushed):**  
-https://cdn.jsdelivr.net/gh/Clararentalpm/Rental-pm@cursor/carindale-preview-aee1/Rental%20Management/safe-preview/index.html
+This Cloudflare tunnel serves only `safe-preview/` from this cloud agent. It stays up while the agent preview server is running.
 
-Alternate: https://raw.githack.com/Clararentalpm/Rental-pm/cursor/carindale-preview-aee1/Rental%20Management/safe-preview/index.html
+**Do not use for this check:** production hosts `https://clararentalpm.github.io/Rental-pm/` or `https://rental-pm-v2.netlify.app/` (those load production Supabase; PR #28 soft-reconcile can write room flags after sign-in).
 
-This Cloudflare quick tunnel stays up while the cloud agent preview server is running.
+Source for this preview branch: `cursor/carindale-preview-aee1` (separate from PR #28 head).
 
 
 ## How to check (iPad)

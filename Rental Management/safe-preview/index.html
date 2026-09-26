@@ -691,7 +691,7 @@ function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
 function clearSession(){localStorage.removeItem(STORE)}
 function timeout(ms=12000){const c=new AbortController(),id=setTimeout(()=>c.abort(),ms);return{c,done:()=>clearTimeout(id)}}
 async function parse(r){const text=await r.text();let b={};try{b=text?JSON.parse(text):{}}catch{b={message:text}}if(!r.ok)throw new Error(b.msg||b.message||b.error_description||b.error||`Request failed (${r.status})`);return b}
-async function raw(path,opts={},auth=true){
+let raw = async function(path,opts={},auth=true){
   let s=getSession(); const t=timeout();
   try{
     const headers={apikey:SB_KEY,'Content-Type':'application/json',...(opts.headers||{})};
@@ -699,12 +699,12 @@ async function raw(path,opts={},auth=true){
     return await parse(await fetch(SB_URL+path,{...opts,headers,signal:t.c.signal}));
   }catch(e){if(e.name==='AbortError')throw new Error('Request timed out. Please wait and retry once.');throw e}finally{t.done()}
 }
-async function signIn(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
-async function refreshSession(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
-async function api(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
-const select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
-const insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
-const patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+let signIn = async function(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
+let refreshSession = async function(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
+let api = async function(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
+let select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
+let insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+let patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
 
 function showAuth(msg='',err=''){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#app').classList.add('hidden');$('#fatal').classList.add('hidden');$('#auth').classList.remove('hidden');$('#auth-msg').textContent=msg;$('#auth-msg').classList.toggle('hidden',!msg);$('#auth-err').textContent=err;$('#auth-err').classList.toggle('hidden',!err)}
 function showApp(){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#auth').classList.add('hidden');$('#fatal').classList.add('hidden');$('#app').classList.remove('hidden')}
@@ -816,7 +816,7 @@ function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.n
  * Room-config only — never tenancies, payments, or bonds.
  * Runs even when rooms.ensuite is already correct but bathroom_type contradicts.
  */
-async function reconcileCarindaleEnsuiteFlags(){
+let reconcileCarindaleEnsuiteFlags = async function(){
   const corrected=[];
   const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
   for(const p of props){
@@ -2922,7 +2922,7 @@ function findConfidentExistingPayment(a){
  * - link existing rent_payments when confidently matched
  * - NEVER create a rent_payment
  */
-async function softReconcileOpenActions(){
+let softReconcileOpenActions = async function(){
   if(state.paymentActionsError)return {updated:0,linked:0};
   if(!canEdit())return {updated:0,linked:0};
   const open=(state.paymentActions||[]).filter(a=>['open','due_soon','overdue','partially_paid'].includes(String(a.status||'').toLowerCase()));
@@ -3174,7 +3174,7 @@ function denyUnauthorisedAccess(message){
   showAuth(message||'Your account is signed in but is not authorised for Rental PM. Ask an authorised account holder to invite you from Staff Access.','');
 }
 
-async function loadAll(){
+let loadAll = async function(){
   $('#sync').textContent='Syncing…';
   const req=[
     select('properties','select=*&order=id'),
@@ -6109,7 +6109,7 @@ $('#setpw').onclick=async()=>{
   try{await raw('/auth/v1/user',{method:'PUT',body:JSON.stringify({password:p1})},true);$('#auth').classList.add('hidden');showApp();await loadAll();toast('Account activated — welcome to Rental PM')}catch(e){$('#reset-err').textContent=e.message;$('#reset-err').classList.remove('hidden')}finally{b.disabled=false;if(!$('#auth').classList.contains('hidden'))b.textContent='Save password'}
 };
 
-async function start(){
+let start = async function(){
   if(parseRecovery())return;
   const s=getSession();if(!s?.access_token){showAuth();return}
   try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){

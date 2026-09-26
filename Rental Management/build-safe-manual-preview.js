@@ -329,6 +329,29 @@ html = html.replace(
   "const SB_KEY='safe-preview-no-key';"
 );
 
+// Preview overrides reassign these helpers. Convert only the GENERATED copy to `let`
+// bindings so overrides work; never change the real app source (PR #28 index.html).
+const rebind = [
+  [/async function raw\(/, 'let raw = async function('],
+  [/async function signIn\(/, 'let signIn = async function('],
+  [/async function refreshSession\(/, 'let refreshSession = async function('],
+  [/async function api\(/, 'let api = async function('],
+  [/const select=/, 'let select='],
+  [/const insert=/, 'let insert='],
+  [/const patch=/, 'let patch='],
+  [/async function reconcileCarindaleEnsuiteFlags\(/, 'let reconcileCarindaleEnsuiteFlags = async function('],
+  [/async function softReconcileOpenActions\(/, 'let softReconcileOpenActions = async function('],
+  [/async function loadAll\(/, 'let loadAll = async function('],
+  [/async function start\(/, 'let start = async function('],
+];
+for (const [from, to] of rebind) {
+  if (!from.test(html)) {
+    console.error('Missing expected declaration for rewrite:', from);
+    process.exit(1);
+  }
+  html = html.replace(from, to);
+}
+
 const outFile = path.join(outDir, 'index.html');
 fs.writeFileSync(outFile, html);
 fs.writeFileSync(

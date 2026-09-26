@@ -5,8 +5,10 @@
 -- McGregor rooms must remain unchanged.
 -- Room-config only — does NOT touch tenancies, payments, bonds, or bookings.
 -- DO NOT RUN IN PRODUCTION without owner approval.
--- Prefer applying via app reconcile (reconcileCarindaleEnsuiteFlags) after deploy,
--- or run this SQL manually in Supabase SQL Editor.
+-- Prefer this SQL in Supabase SQL Editor (manual, owner-approved).
+-- The SPA display SoT (roomIsEnsuite / roomBathroomTypeDisplay) works without it.
+-- App load does NOT auto-PATCH rooms/room_profiles. Manual console helper only:
+--   reconcileCarindaleEnsuiteFlags() — prefer SQL over that for production.
 -- =============================================================================
 
 -- Preview current Carindale / McGregor rooms 3 and 4:

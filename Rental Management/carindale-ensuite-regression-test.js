@@ -284,5 +284,32 @@ check('No hard-coded Carindale Room 4 = Ensuite assumption in app source', () =>
   assert(/carindaleBathroomTypeToPersist/.test(html), 'persist helper');
 });
 
+check('8 loadAll must NOT auto-reconcile Carindale room flags (no production PATCH on boot)', () => {
+  assert(/function carindaleEnsuiteDriftReport/.test(html), 'drift report helper');
+  assert(/function reconcileCarindaleEnsuiteFlags/.test(html), 'manual helper still present');
+  // loadAll body must not await/call reconcileCarindaleEnsuiteFlags
+  const loadAllMatch = html.match(/async function loadAll\(\)\{[\s\S]*?\n\}/);
+  assert(loadAllMatch, 'loadAll found');
+  assert(!/reconcileCarindaleEnsuiteFlags\s*\(/.test(loadAllMatch[0]), 'loadAll does not call reconcile');
+  assert(/NO auto PATCH on load|NOT called from loadAll/i.test(html), 'documented no auto-write');
+
+  seed();
+  const r3 = sandbox.state.rooms.find((r) => r.id === 201);
+  const r4 = sandbox.state.rooms.find((r) => r.id === 202);
+  const p3 = sandbox.state.roomProfiles.find((x) => x.room_id === 201);
+  const p4 = sandbox.state.roomProfiles.find((x) => x.room_id === 202);
+  // Stale stored flags
+  r3.ensuite = false;
+  r4.ensuite = true;
+  p3.bathroom_type = 'Shared';
+  p4.bathroom_type = 'Ensuite';
+  const drift = sandbox.carindaleEnsuiteDriftReport();
+  assert(drift.length >= 2, 'drift detected without writing');
+  assert(r3.ensuite === false && r4.ensuite === true, 'stored flags unchanged by report');
+  assert(p3.bathroom_type === 'Shared' && p4.bathroom_type === 'Ensuite', 'bathroom unchanged by report');
+  // Display still canonical
+  assert(sandbox.roomIsEnsuite(r3) === true && sandbox.roomIsEnsuite(r4) === false, 'display SoT');
+});
+
 console.log(`\n${passed} checks passed`);
 if (process.exitCode) process.exit(1);

@@ -657,9 +657,42 @@ function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_i
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
 /**
- * Persist canonical Carindale ensuite + bathroom_type when either drifts.
- * Room-config only — never tenancies, payments, or bonds.
- * Runs even when rooms.ensuite is already correct but bathroom_type contradicts.
+ * Read-only report of Carindale R3/R4 drift (rooms.ensuite + bathroom_type).
+ * Display/pickers use roomIsEnsuite / roomBathroomTypeDisplay and do not need DB writes.
+ * Persistence is via supabase_carindale_ensuite_rooms_fix.sql — NOT auto-run on load.
+ */
+function carindaleEnsuiteDriftReport(){
+  const out=[];
+  const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
+  for(const p of props){
+    const rooms=(state.rooms||[]).filter(r=>Number(r.property_id)===Number(p.id));
+    for(const r of rooms){
+      const want=canonicalCarindaleEnsuite(r.room_no);
+      if(want===null)continue;
+      const rp=(state.roomProfiles||[]).find(x=>Number(x.room_id)===Number(r.id));
+      const nextBath=rp?carindaleBathroomTypeToPersist(r,rp.bathroom_type):null;
+      const curBath=rp?(rp.bathroom_type==null||rp.bathroom_type===''?null:String(rp.bathroom_type)):null;
+      const normNext=nextBath==null||nextBath===''?null:String(nextBath);
+      const ensuiteDrift=!!r.ensuite!==want;
+      const bathDrift=!!rp&&normNext!==curBath&&!(normNext==null&&(curBath==null||curBath===''));
+      if(ensuiteDrift||bathDrift){
+        out.push({
+          roomId:Number(r.id),
+          roomNo:Number(r.room_no),
+          property:p.name,
+          storedEnsuite:!!r.ensuite,
+          wantEnsuite:want,
+          storedBathroom:curBath,
+          wantBathroom:normNext
+        });
+      }
+    }
+  }
+  return out;
+}
+/**
+ * Manual persist helper — NOT called from loadAll / boot.
+ * Prefer SQL migration for production. Kept for operator console use only.
  */
 async function reconcileCarindaleEnsuiteFlags(){
   const corrected=[];
@@ -3070,10 +3103,10 @@ async function loadAll(){
   state.me=profile;
   $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'account'} · full access`;
   $('#new-stay').classList.toggle('hidden',!canEdit());
-  // Authorised holders: non-destructive reconcile (no new payments created).
+  // Authorised holders: non-destructive payment-action reconcile (no new payments created).
   if(canEdit()){try{await softReconcileOpenActions()}catch(_){}}
-  // Room-config only: Carindale R3 ensuite / R4 not ensuite (never touches stays/payments/bonds).
-  if(canEdit()){try{await reconcileCarindaleEnsuiteFlags()}catch(_){}}
+  // Carindale R3/R4: display SoT is roomIsEnsuite / roomBathroomTypeDisplay — NO auto PATCH on load.
+  // Persist stored flags only via supabase_carindale_ensuite_rooms_fix.sql (manual).
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }

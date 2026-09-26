@@ -441,7 +441,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </form></dialog>
 
 <dialog id="invite-dialog"><form id="invite-form" class="dialog-body">
-  <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Owner only. The invited staff member will receive an email to set their password. If they do not receive it, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
+  <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Any authorised account holder can invite. The invitee receives an email to set their password. Stored role labels are for history only — all authorised holders get full app access. If they do not receive the email, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Email<input name="email" type="email" required></label>
     <label>Display name<input name="display_name"></label>
@@ -571,7 +571,66 @@ function isSofaRoom(r){
   return false;
 }
 function roomShortName(r){if(!r)return'Unassigned';return isSofaRoom(r)?'Sofa':`Room ${r.room_no}`}
-function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&r.ensuite)?`${n} · Ensuite`:n}
+/**
+ * Canonical Carindale ensuite configuration (owner-confirmed repeatedly):
+ *   Room 3 = Ensuite
+ *   Room 4 = NOT Ensuite
+ * McGregor and other properties keep rooms.ensuite as stored.
+ * Source of display/logic truth for ensuite badges and room pickers.
+ */
+function isCarindaleProperty(p=property()){return /carindale/i.test(String(p?.name||''))}
+function canonicalCarindaleEnsuite(roomNo){
+  const n=Number(roomNo);
+  if(n===3)return true;
+  if(n===4)return false;
+  return null;
+}
+/** Effective ensuite flag — never trust a stale Carindale R3/R4 rooms.ensuite row alone. */
+function roomIsEnsuite(r){
+  if(!r||isSofaRoom(r))return false;
+  const prop=propertyBy(r.property_id);
+  if(isCarindaleProperty(prop)){
+    const canon=canonicalCarindaleEnsuite(r.room_no);
+    if(canon!==null)return canon;
+  }
+  return !!r.ensuite;
+}
+/**
+ * Bathroom type shown / edited for a room.
+ * Carindale R3/R4 must stay consistent with the ensuite badge:
+ *   R3 → Ensuite (keep existing text if it already mentions ensuite)
+ *   R4 → never display as Ensuite (map contradictory "Ensuite" → Shared)
+ * Other properties / rooms: stored room_profiles.bathroom_type unchanged.
+ */
+function roomBathroomTypeDisplay(r,profile){
+  const p=profile||(state.roomProfiles||[]).find(x=>Number(x.room_id)===Number(r?.id))||{};
+  const stored=String(p.bathroom_type??'').trim();
+  if(!r||!isCarindaleProperty(propertyBy(r.property_id)))return stored||'—';
+  const want=canonicalCarindaleEnsuite(r.room_no);
+  if(want===true){
+    if(/ensuite/i.test(stored))return stored;
+    return 'Ensuite';
+  }
+  if(want===false){
+    if(/ensuite/i.test(stored))return 'Shared';
+    return stored||'—';
+  }
+  return stored||'—';
+}
+/** Value to persist for bathroom_type; null want ⇒ pass through. Never invent detail for non-Carindale R3/R4. */
+function carindaleBathroomTypeToPersist(r,proposed){
+  if(!r||!isCarindaleProperty(propertyBy(r.property_id)))return proposed;
+  const want=canonicalCarindaleEnsuite(r.room_no);
+  if(want===null)return proposed;
+  const bt=String(proposed??'').trim();
+  if(want===true){
+    if(/ensuite/i.test(bt))return bt;
+    return 'Ensuite';
+  }
+  if(/ensuite/i.test(bt))return 'Shared';
+  return bt||null;
+}
+function roomOptionLabel(r){const n=roomShortName(r);return(!isSofaRoom(r)&&roomIsEnsuite(r))?`${n} · Ensuite`:n}
 function roomChipLabel(r){if(!r)return'Other';return isSofaRoom(r)?'Sofa':`R${r.room_no}`}
 function roomLabel(id){const r=roomBy(id);if(!r)return'Unassigned / Living Room';const prop=propertyBy(r.property_id)?.name||'';return `${prop} ${roomShortName(r)}`.trim()}
 /**
@@ -597,6 +656,43 @@ function compareRoomsNatural(a,b){
 function currentPropertyRooms(){return state.rooms.filter(r=>Number(r.property_id)===Number(state.propertyId)).slice().sort(compareRoomsNatural)}
 function propertyHasSofa(pid=state.propertyId){return state.rooms.some(r=>Number(r.property_id)===Number(pid)&&isSofaRoom(r))}
 function isMcGregorProperty(p=property()){return /mc\s*gregor/i.test(String(p?.name||''))}
+/**
+ * Persist canonical Carindale ensuite + bathroom_type when either drifts.
+ * Room-config only — never tenancies, payments, or bonds.
+ * Runs even when rooms.ensuite is already correct but bathroom_type contradicts.
+ */
+async function reconcileCarindaleEnsuiteFlags(){
+  const corrected=[];
+  const props=(state.properties||[]).filter(p=>isCarindaleProperty(p));
+  for(const p of props){
+    const rooms=(state.rooms||[]).filter(r=>Number(r.property_id)===Number(p.id));
+    for(const r of rooms){
+      const want=canonicalCarindaleEnsuite(r.room_no);
+      if(want===null)continue;
+      let touched=false;
+      try{
+        if(!!r.ensuite!==want){
+          await patch('rooms',`id=eq.${r.id}`,{ensuite:want});
+          r.ensuite=want;
+          touched=true;
+        }
+        const rp=(state.roomProfiles||[]).find(x=>Number(x.room_id)===Number(r.id));
+        if(rp){
+          const next=carindaleBathroomTypeToPersist(r,rp.bathroom_type);
+          const cur=rp.bathroom_type==null||rp.bathroom_type===''?null:String(rp.bathroom_type);
+          const normNext=next==null||next===''?null:String(next);
+          if(normNext!==cur&&!(normNext==null&&(cur==null||cur===''))){
+            await patch('room_profiles',`room_id=eq.${r.id}`,{bathroom_type:normNext});
+            rp.bathroom_type=normNext;
+            touched=true;
+          }
+        }
+        if(touched)corrected.push(Number(r.id));
+      }catch(_){/* display still uses roomIsEnsuite / roomBathroomTypeDisplay */}
+    }
+  }
+  return corrected;
+}
 /**
  * Stable property for a stay: room.property_id (source of truth).
  * Never infer property from room-name text. Unassigned room_id ⇒ not on any property tab.
@@ -2888,8 +2984,40 @@ async function recreateActionForTenancy(t,note){
   if(id)await logActionHistory(id,'created','',`due ${v.due_date}`,'Recalculated after booking change');
 }
 
+/**
+ * Authorisation model (post full-access parity):
+ * - Unauthenticated → no private Rental PM access
+ * - Authenticated + profiles row → AUTHORISED ACCOUNT HOLDER → full Owner-level app access
+ * - Authenticated without profiles row → unauthorised (no private data)
+ * Stored roles (owner/manager/viewer) are labels for history/display only and must NOT
+ * gate modules, buttons, Staff Access, or destructive actions differently.
+ */
 function role(){return state.me?.role||'viewer'}
-function canEdit(){return ['owner','manager'].includes(role())}
+function isSignedIn(){return !!getSession()?.access_token}
+function authorisedProfileFor(userId){
+  if(!userId)return null;
+  return (state.profiles||[]).find(p=>String(p.id)===String(userId))||null;
+}
+function currentUserId(){return getSession()?.user?.id||null}
+function isAuthorisedAccountHolder(){
+  const sid=currentUserId();
+  if(sid)return !!authorisedProfileFor(sid);
+  // In-memory me already resolved from profiles (API still requires JWT).
+  if(state.me&&state.me.id!=null)return !!authorisedProfileFor(state.me.id);
+  // Legacy fixtures / transitional me without id: role label present + profiles loaded.
+  if(state.me&&state.me.role&&(state.profiles||[]).length)return true;
+  return false;
+}
+/** Full application access — same capability set historically reserved for Owner. */
+function hasFullAppAccess(){return isAuthorisedAccountHolder()}
+function canEdit(){return hasFullAppAccess()}
+function canManageStaff(){return hasFullAppAccess()}
+/** Deny private app use when signed-in but not in profiles (keeps auth, blocks data). */
+function denyUnauthorisedAccess(message){
+  $('#app').classList.add('hidden');
+  $('#boot').classList.add('hidden');
+  showAuth(message||'Your account is signed in but is not authorised for Rental PM. Ask an authorised account holder to invite you from Staff Access.','');
+}
 
 async function loadAll(){
   $('#sync').textContent='Syncing…';
@@ -2931,11 +3059,21 @@ async function loadAll(){
   });
   if(!state.properties.length)throw new Error(errs[0]||'No property data returned.');
   if(!state.propertyId||!state.properties.some(p=>Number(p.id)===Number(state.propertyId)))state.propertyId=state.properties[0].id;
-  const s=getSession();state.me=state.profiles.find(p=>p.id===s?.user?.id)||{display_name:s?.user?.email||'Staff',role:'viewer'};
-  $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'viewer'}`;
+  const s=getSession();
+  const profile=(state.profiles||[]).find(p=>p.id===s?.user?.id)||null;
+  if(!profile){
+    // Authenticated JWT but no profiles row → not an authorised Rental PM account holder.
+    state.me=null;
+    denyUnauthorisedAccess();
+    return;
+  }
+  state.me=profile;
+  $('#me').textContent=`${state.me.display_name||'Staff'} · ${state.me.role||'account'} · full access`;
   $('#new-stay').classList.toggle('hidden',!canEdit());
-  // Owner/Manager only: non-destructive reconcile (no new payments created).
+  // Authorised holders: non-destructive reconcile (no new payments created).
   if(canEdit()){try{await softReconcileOpenActions()}catch(_){}}
+  // Room-config only: Carindale R3 ensuite / R4 not ensuite (never touches stays/payments/bonds).
+  if(canEdit()){try{await reconcileCarindaleEnsuiteFlags()}catch(_){}}
   renderChrome();render();
   $('#sync').textContent=errs.length?`Partial sync (${errs.length})`:'Synced';
 }
@@ -3179,7 +3317,7 @@ function overviewPage(){
     const nextLine=next
       ?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}${next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:''}<div class="muted small">Upcoming booking</div></div>`
       :'';
-    return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+    return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(roomIsEnsuite(r)?'<span class="badge ensuite">Ensuite</span>':'')}</div>
       <div class="muted small">${cur.length?'Current occupant':'Status'}</div>
       <div class="occupant">${occupantLabel}</div>
       <div class="subline">${rentLine}</div>
@@ -3352,8 +3490,8 @@ function roomsPage(){
     const p=state.roomProfiles.find(x=>Number(x.room_id)===Number(r.id))||{};
     const extraRoom=getExtraRoomFee(p);
     const note=displayPricingNote(p);
-    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(r.ensuite?'<span class="badge ensuite">Ensuite</span>':'')}</div>
-    <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(p.bathroom_type||'—')}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
+    return `<article class="room-card"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(roomIsEnsuite(r)?'<span class="badge ensuite">Ensuite</span>':'')}</div>
+    <dl><dt>Room type</dt><dd>${esc(p.room_type||'—')}</dd><dt>Capacity</dt><dd>${esc(p.capacity||'—')}</dd><dt>Bathroom</dt><dd>${esc(roomBathroomTypeDisplay(r,p))}</dd><dt>Beds</dt><dd>${esc(p.beds||'—')}</dd>
     <dt>Standard</dt><dd>${money(p.standard_price)}</dd><dt>Current asking</dt><dd>${money(p.current_asking_price)}</dd><dt>Peak</dt><dd>${p.peak_price_min||p.peak_price_max?`${money(p.peak_price_min)}–${money(p.peak_price_max)}`:'—'}</dd><dt>Off-peak</dt><dd>${p.off_peak_min||p.off_peak_max?`${money(p.off_peak_min)}–${money(p.off_peak_max)}`:'—'}</dd><dt>Short stay</dt><dd>${p.short_stay_min||p.short_stay_max?`${money(p.short_stay_min)}–${money(p.short_stay_max)} / ${esc(p.short_stay_unit||'')}`:'—'}</dd>
     <dt>Extra room</dt><dd>${extraRoom!==''?`${money(extraRoom)} / day`:'—'}</dd>
     <dt>加床</dt><dd>${p.extra_bed_fee!==null&&p.extra_bed_fee!==undefined&&p.extra_bed_fee!==''?money(p.extra_bed_fee):'—'}</dd></dl>
@@ -3810,7 +3948,7 @@ function bondsPage(){
   const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
   return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
   <div class="tenant-tools"><div class="view-switch"><button class="${filter==='open'?'active':''}" data-bfilter="open">Open (${openRows.length})</button><button class="${filter==='closed'?'active':''}" data-bfilter="closed">Refunded / Closed (${closedRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${role()==='owner'?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(bondRemaining(b),cur)}</b>${bondForfeited(b)>0?`<div class="muted small">Forfeited ${money(bondForfeited(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${canEdit()?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed).</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(e.action)}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
 }
 function pricingPage(){
@@ -3818,13 +3956,13 @@ function pricingPage(){
   return `<section class="panel"><div class="panel-head"><h2>Price history</h2><span class="muted small">Changes made through Room Profiles are logged here.</span></div>${rows.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Room</th><th>Price type</th><th>Old</th><th>New</th><th>Note</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${new Date(x.created_at).toLocaleString('en-AU')}</td><td>${esc(roomLabel(x.room_id))}</td><td>${esc(x.price_type)}</td><td>${esc(x.old_value||'—')}</td><td>${esc(x.new_value)}</td><td>${esc(x.note||'')}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No price changes logged yet.</div>'}</section>`;
 }
 function staffPage(){
-  if(role()!=='owner')return'<section class="panel"><div class="empty">Only the owner can view Staff Access.</div></section>';
+  if(!canManageStaff())return'<section class="panel"><div class="empty">Authorised account required to view Staff Access.</div></section>';
   const myId=getSession()?.user?.id||'';
-  return `<section class="panel"><div class="panel-head"><div><h2>Staff access</h2><div class="muted small">Owner can invite, resend setup links, change roles, and remove sub-accounts.</div></div><button id="invite-staff" class="btn primary">+ Add / Invite staff</button></div>
-  <div class="table-wrap"><table><thead><tr><th>Name</th><th>User ID</th><th>Role</th><th>Actions</th></tr></thead><tbody>
-  ${state.profiles.map(p=>`<tr><td><b>${esc(p.display_name||'Staff')}</b>${p.id===myId?'<div class="muted small">Main Owner / current user</div>':''}</td><td class="mono small">${esc(p.id)}</td><td><select class="role-select" data-user="${esc(p.id)}" ${p.id===myId?'disabled':''}><option ${p.role==='owner'?'selected':''}>owner</option><option ${p.role==='manager'?'selected':''}>manager</option><option ${p.role==='viewer'?'selected':''}>viewer</option></select></td><td><div class="tenant-actions">${p.id!==myId?`<button class="btn ghost resend-staff" data-user="${esc(p.id)}">Resend link</button><button class="btn ghost reset-staff" data-user="${esc(p.id)}">Reset staff access</button><button class="btn danger delete-staff" data-user="${esc(p.id)}">Delete</button>`:'<span class="muted small">Protected</span>'}</div></td></tr>`).join('')}
+  return `<section class="panel"><div class="panel-head"><div><h2>Staff access</h2><div class="muted small">All authorised account holders have full app access (same as Owner). Role labels below are for history/display only and do not restrict permissions. Invite, resend setup links, change labels, or remove access.</div></div><button id="invite-staff" class="btn primary">+ Add / Invite staff</button></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>User ID</th><th>Role label</th><th>Actions</th></tr></thead><tbody>
+  ${state.profiles.map(p=>`<tr><td><b>${esc(p.display_name||'Staff')}</b>${p.id===myId?'<div class="muted small">Current signed-in account</div>':''}</td><td class="mono small">${esc(p.id)}</td><td><select class="role-select" data-user="${esc(p.id)}" ${p.id===myId?'disabled':''}><option ${p.role==='owner'?'selected':''}>owner</option><option ${p.role==='manager'?'selected':''}>manager</option><option ${p.role==='viewer'?'selected':''}>viewer</option></select></td><td><div class="tenant-actions">${p.id!==myId?`<button class="btn ghost resend-staff" data-user="${esc(p.id)}">Resend link</button><button class="btn ghost reset-staff" data-user="${esc(p.id)}">Reset staff access</button><button class="btn danger delete-staff" data-user="${esc(p.id)}">Delete</button>`:'<span class="muted small">Protected</span>'}</div></td></tr>`).join('')}
   </tbody></table></div>
-  <div class="note" style="margin-top:12px">Resend link sends a fresh setup/recovery email and returns the staff member to the Netlify Rental PM site. Repeated clicks are de-duplicated while a request is in progress. If the email provider temporarily rate-limits delivery, the staff account remains active and is not blocked.</div>
+  <div class="note" style="margin-top:12px">Resend link sends a fresh setup/recovery email. Repeated clicks are de-duplicated while a request is in progress. If the email provider temporarily rate-limits delivery, the staff account remains active and is not blocked. Passwords, JWTs and service-role keys are never shown here.</div>
   </section>`;
 }
 function historyPage(){
@@ -4602,7 +4740,7 @@ async function deletePayment(id){
   }catch(e){alert(e.message)}
 }
 async function deleteBond(id){
-  if(role()!=='owner'){alert('Owner permission is required to delete bond / deposit history.');return}
+  if(!canEdit()){alert('Authorised account required to delete bond / deposit history.');return}
   const b=state.bonds.find(x=>Number(x.id)===Number(id));
   if(!b)return;
   const hist=(state.bondRefundEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length + (state.bondEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length;
@@ -4884,7 +5022,12 @@ async function setBondRefundedStatus(id,refunded){
 function openRoom(id){
   const r=roomBy(id),p=state.roomProfiles.find(x=>Number(x.room_id)===Number(id))||{},f=$('#room-form');f.reset();f.elements.room_id.value=id;$('#room-dialog-name').textContent=roomLabel(id);
   ['room_type','capacity','bathroom_type','beds','standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','short_stay_unit','extra_bed_fee','amenities'].forEach(k=>{if(f.elements[k])f.elements[k].value=p[k]??''});
-  if(f.elements.ensuite) f.elements.ensuite.checked=!!r.ensuite;
+  if(f.elements.ensuite) f.elements.ensuite.checked=roomIsEnsuite(r);
+  // Carindale R3/R4: bathroom field matches badge (do not show contradictory stored text).
+  if(f.elements.bathroom_type&&r&&isCarindaleProperty(propertyBy(r.property_id))&&canonicalCarindaleEnsuite(r.room_no)!==null){
+    const shown=roomBathroomTypeDisplay(r,p);
+    f.elements.bathroom_type.value=shown==='—'?'':shown;
+  }
   if(f.elements.extra_room_fee)f.elements.extra_room_fee.value=getExtraRoomFee(p);
   if(f.elements.pricing_note)f.elements.pricing_note.value=displayPricingNote(p);
   // Sensible defaults when empty (owner can change before save)
@@ -4894,9 +5037,9 @@ function openRoom(id){
 }
 
 async function deleteStaff(userId){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const p=state.profiles.find(x=>x.id===userId);if(!p)return;
-  if(userId===getSession()?.user?.id){alert('Your Main Owner account is protected and cannot be deleted here.');return}
+  if(userId===getSession()?.user?.id){alert('Your own account is protected and cannot be deleted here.');return}
   if(!confirm(`Delete staff access for ${p.display_name||'this user'}? They will lose Rental PM access.`))return;
   try{
     const s=getSession();
@@ -4907,13 +5050,13 @@ async function deleteStaff(userId){
 }
 let resendBusy={};
 async function resetStaffAccess(button){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const userId=button.dataset.user,p=state.profiles.find(x=>x.id===userId);if(!p)return;
   if(!confirm(`Reset sign-in access for ${p.display_name||'this staff member'}? A fresh password setup email will be requested. Their staff record will not be deleted.`))return;
   await resendStaffLink(button);
 }
 async function resendStaffLink(button){
-  if(role()!=='owner')return;
+  if(!canManageStaff())return;
   const userId=button.dataset.user;if(resendBusy[userId])return;
   const p=state.profiles.find(x=>x.id===userId);if(!p)return;
   if(!confirm(`Send a fresh setup link to ${p.display_name||'this staff member'}?`))return;
@@ -4935,8 +5078,9 @@ async function resendStaffLink(button){
   }
 }
 async function changeRole(user,value){
-  if(user===getSession()?.user?.id && value!=='owner' && role()==='owner'){if(!confirm('This would remove your own owner role. Continue?')){render();return}}
-  try{await patch('profiles',`id=eq.${encodeURIComponent(user)}`,{role:value});toast('Staff role updated');await loadAll()}catch(e){alert(e.message);await loadAll()}
+  if(!canManageStaff())return;
+  if(user===getSession()?.user?.id && value!==(state.me?.role||'owner')){if(!confirm('This changes your own role label only (permissions stay full access for authorised holders). Continue?')){render();return}}
+  try{await patch('profiles',`id=eq.${encodeURIComponent(user)}`,{role:value});toast('Staff role label updated');await loadAll()}catch(e){alert(e.message);await loadAll()}
 }
 
 
@@ -5362,8 +5506,25 @@ $('#room-form').onsubmit=async e=>{
   row.pricing_note=withExtraRoomFee(fd.get('pricing_note')||'',fd.get('extra_room_fee'));
   row.updated_at=new Date().toISOString();
   try{
+    const room=roomBy(id);
     if(f.elements.ensuite){
-      await patch('rooms',`id=eq.${id}`,{ensuite:!!f.elements.ensuite.checked});
+      let ensuiteFlag=!!f.elements.ensuite.checked;
+      // Carindale Room 3/4 cannot drift from canonical config via the form.
+      if(room&&isCarindaleProperty(propertyBy(room.property_id))){
+        const canon=canonicalCarindaleEnsuite(room.room_no);
+        if(canon!==null)ensuiteFlag=canon;
+      }
+      await patch('rooms',`id=eq.${id}`,{ensuite:ensuiteFlag});
+      if(room)room.ensuite=ensuiteFlag;
+      if(f.elements.ensuite)f.elements.ensuite.checked=ensuiteFlag;
+    }
+    // Keep bathroom_type consistent with Carindale R3/R4 canonical ensuite (badge ↔ Bathroom field).
+    if(room){
+      row.bathroom_type=carindaleBathroomTypeToPersist(room,row.bathroom_type);
+      if(f.elements.bathroom_type){
+        const shown=row.bathroom_type==null||row.bathroom_type===''?'':String(row.bathroom_type);
+        f.elements.bathroom_type.value=shown;
+      }
     }
     await patch('room_profiles',`room_id=eq.${id}`,row);
     for(const k of ['standard_price','current_asking_price','peak_price_min','peak_price_max','off_peak_min','off_peak_max','short_stay_min','short_stay_max','extra_bed_fee']){
@@ -5737,11 +5898,12 @@ $('#bond-action-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 $('#invite-form').onsubmit=async e=>{
-  e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#invite-error'),note=$('#invite-note');err.classList.add('hidden');note.classList.add('hidden');
+  e.preventDefault();if(!canManageStaff()){alert('Authorised account required to invite staff.');return}
+  const f=e.currentTarget,fd=new FormData(f),err=$('#invite-error'),note=$('#invite-note');err.classList.add('hidden');note.classList.add('hidden');
   try{
     const s=getSession();const r=await fetch(`${SB_URL}/functions/v1/rental-invite-staff`,{method:'POST',headers:{'Content-Type':'application/json',apikey:SB_KEY,Authorization:`Bearer ${s?.access_token||''}`},body:JSON.stringify({email:fd.get('email'),display_name:fd.get('display_name'),role:fd.get('role'),redirect_to:CANONICAL_URL})});
     const body=await r.json();if(!r.ok)throw new Error(body.error||`Invite failed (${r.status})`);
-    note.textContent='Invite sent. The staff member can use the email link to set their password.';note.classList.remove('hidden');f.reset();await loadAll();
+    note.textContent='Invite sent. The staff member can use the email link to set their password. All authorised accounts receive full app access.';note.classList.remove('hidden');f.reset();await loadAll();
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 
@@ -5795,7 +5957,11 @@ $('#setpw').onclick=async()=>{
 async function start(){
   if(parseRecovery())return;
   const s=getSession();if(!s?.access_token){showAuth();return}
-  try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){if(/token|jwt|session|signed in|refresh/i.test(e.message)){clearSession();showAuth('Your previous session expired. Please sign in again.','')}else fatal(e.message)}
+  try{if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();showApp();await loadAll()}catch(e){
+    if(/token|jwt|session|signed in|refresh|Not signed in/i.test(e.message)){clearSession();showAuth('Your previous session expired. Please sign in again.','')}
+    else if(/not authorised|unauthorized|unauthorised/i.test(e.message)){denyUnauthorisedAccess(e.message)}
+    else fatal(e.message)
+  }
 }
 start();
 </script>

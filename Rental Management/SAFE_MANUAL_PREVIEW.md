@@ -15,14 +15,33 @@
 
 ## Preview URL
 
-**iPad HTTPS preview (primary):**  
-https://slots-roger-scripting-growing.trycloudflare.com/
+### Primary (HTTPS, Safari / iPad) — verified
 
-This Cloudflare tunnel serves only `safe-preview/` from this cloud agent. It stays up while the agent preview server is running.
+**URL:** https://classy-crostata-ecb4d6.netlify.app/
 
-**Do not use for this check:** production hosts `https://clararentalpm.github.io/Rental-pm/` or `https://rental-pm-v2.netlify.app/` (those load production Supabase; PR #28 soft-reconcile can write room flags after sign-in).
+**Password when asked:** `My-Drop-Site`
 
-Source for this preview branch: `cursor/carindale-preview-aee1` (separate from PR #28 head).
+This is a **separate Netlify Drop test site** (not `rental-pm-v2.netlify.app`, not GitHub Pages production).
+
+- Connects to production Supabase? **NO** (test data only; orange banner)
+- **Availability:** about **1 hour** from publish unless you **Claim this site** with a free Netlify account (claiming keeps it online and still separate from production)
+- Open soon, or claim it if you need it longer
+
+### Durable offline alternative (no host expiry)
+
+1. On iPad Safari open: https://github.com/Clararentalpm/Rental-pm/releases/tag/safe-preview-pr28
+2. Download **`rental-pm-pr28-safe-manual-preview.html`**
+3. In **Files**, tap the file → Share → **Open in Safari** (or Open With → Safari)
+4. You should see the orange **SAFE MANUAL PREVIEW / TEST DATA** banner
+
+Same test-data app; works offline; does not talk to production Supabase.
+
+### Do not use
+
+- `https://clararentalpm.github.io/Rental-pm/`
+- `https://rental-pm-v2.netlify.app/`
+- Old tunnel `https://slots-roger-scripting-growing.trycloudflare.com/` (dead)
+
 
 
 ## How to check (iPad)

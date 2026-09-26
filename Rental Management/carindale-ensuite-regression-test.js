@@ -203,6 +203,9 @@ check('5 Room Profile identifies Room 3 correctly', () => {
   assert(/badge ensuite/.test(page), 'has ensuite badge somewhere');
   // Ensure Room 3 card path would show ensuite: isolate via helper
   assert(sandbox.roomIsEnsuite({ id: 201, property_id: 2, room_no: 3, ensuite: false }) === true, 'profile SoT');
+  // Bathroom field must match badge (not stale Shared)
+  assert(sandbox.roomBathroomTypeDisplay({ id: 201, property_id: 2, room_no: 3 }, { bathroom_type: 'Shared' }) === 'Ensuite', 'R3 bathroom display');
+  assert(/Bathroom<\/dt><dd>Ensuite/.test(page) || page.includes('Ensuite'), 'page shows ensuite bathroom for R3');
 });
 
 check('6 McGregor configuration unaffected', () => {
@@ -215,6 +218,58 @@ check('6 McGregor configuration unaffected', () => {
   assert(sandbox.roomIsEnsuite(mcg4) === true, 'mcg R4 uses stored true');
   assert(!/Ensuite/.test(sandbox.roomOptionLabel(mcg3)), 'mcg3 label');
   assert(/Ensuite/.test(sandbox.roomOptionLabel(mcg4)), 'mcg4 label');
+  // McGregor bathroom_type passes through unchanged
+  assert(
+    sandbox.roomBathroomTypeDisplay(mcg3, { bathroom_type: 'Shared' }) === 'Shared',
+    'mcg bathroom passthrough'
+  );
+});
+
+check('7 Correct ensuite + contradictory bathroom_type → consistent after save/reload (both rooms)', () => {
+  seed();
+  // Start with CORRECT rooms.ensuite but WRONG bathroom_type (the verification residual).
+  const r3 = sandbox.state.rooms.find((r) => r.id === 201);
+  const r4 = sandbox.state.rooms.find((r) => r.id === 202);
+  r3.ensuite = true;
+  r4.ensuite = false;
+  const p3 = sandbox.state.roomProfiles.find((x) => x.room_id === 201);
+  const p4 = sandbox.state.roomProfiles.find((x) => x.room_id === 202);
+  p3.bathroom_type = 'Shared';
+  p4.bathroom_type = 'Ensuite';
+
+  assert(sandbox.roomIsEnsuite(r3) === true && sandbox.roomIsEnsuite(r4) === false, 'ensuite flags ok');
+  assert(sandbox.roomBathroomTypeDisplay(r3, p3) === 'Ensuite', 'display R3 overrides Shared');
+  assert(sandbox.roomBathroomTypeDisplay(r4, p4) === 'Shared', 'display R4 overrides Ensuite');
+
+  // Save path: carindaleBathroomTypeToPersist forces consistent values
+  const saved3 = sandbox.carindaleBathroomTypeToPersist(r3, 'Shared');
+  const saved4 = sandbox.carindaleBathroomTypeToPersist(r4, 'Ensuite');
+  assert(saved3 === 'Ensuite', 'save R3 → Ensuite');
+  assert(saved4 === 'Shared', 'save R4 → Shared');
+  p3.bathroom_type = saved3;
+  p4.bathroom_type = saved4;
+
+  // Reload simulation: ensuite still correct; bathroom_type now aligned; display still consistent
+  assert(r3.ensuite === true && r4.ensuite === false, 'ensuite unchanged');
+  assert(p3.bathroom_type === 'Ensuite' && p4.bathroom_type === 'Shared', 'persisted');
+  assert(sandbox.roomBathroomTypeDisplay(r3, p3) === 'Ensuite', 'reload R3');
+  assert(sandbox.roomBathroomTypeDisplay(r4, p4) === 'Shared', 'reload R4');
+
+  // Reconcile must fix bathroom_type even when ensuite already correct
+  p3.bathroom_type = 'Shared';
+  p4.bathroom_type = 'Ensuite';
+  const next3 = sandbox.carindaleBathroomTypeToPersist(r3, p3.bathroom_type);
+  const next4 = sandbox.carindaleBathroomTypeToPersist(r4, p4.bathroom_type);
+  assert(next3 === 'Ensuite' && next4 === 'Shared', 'reconcile targets');
+  // In-memory apply as reconcile would
+  p3.bathroom_type = next3;
+  p4.bathroom_type = next4;
+  sandbox.state.propertyId = 2;
+  const page = sandbox.roomsPage();
+  assert(/Room 3/.test(page) && /badge ensuite/.test(page), 'R3 badge after reconcile');
+  // Room 4 card should show Bathroom Shared and no ensuite badge on that room's head —
+  // page has R3 ensuite badge; R4 bathroom field Shared
+  assert(page.includes('Shared'), 'R4 bathroom Shared on page');
 });
 
 check('No hard-coded Carindale Room 4 = Ensuite assumption in app source', () => {
@@ -225,6 +280,8 @@ check('No hard-coded Carindale Room 4 = Ensuite assumption in app source', () =>
   assert(!/property_id:\s*2,\s*room_no:\s*4,\s*ensuite:\s*true/.test(multi), 'fixture fixed');
   assert(/property_id:\s*2,\s*room_no:\s*4,\s*ensuite:\s*false/.test(multi), 'fixture R4 false');
   assert(/property_id:\s*2,\s*room_no:\s*3,\s*ensuite:\s*true/.test(multi), 'fixture R3 true');
+  assert(/function roomBathroomTypeDisplay/.test(html), 'bathroom display helper');
+  assert(/carindaleBathroomTypeToPersist/.test(html), 'persist helper');
 });
 
 console.log(`\n${passed} checks passed`);

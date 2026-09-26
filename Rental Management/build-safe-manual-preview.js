@@ -92,9 +92,9 @@ function safePreviewFixture(){
       { room_id: 205, room_type: 'Standard', bathroom_type: 'Shared', beds: 1, capacity: 1, current_asking_price: 220, standard_price: 220 }
     ],
     tenants: [
-      { id: 1, full_name: 'Preview Guest Carindale', email: 'preview.carindale@example.test', phone: '' },
-      { id: 2, full_name: 'Preview Guest McGregor Multi', email: 'preview.mcgregor@example.test', phone: '' },
-      { id: 3, full_name: 'Preview Guest Carindale R5', email: 'preview.r5@example.test', phone: '' }
+      { id: 1, name: 'Preview Guest Carindale', contact_method: 'preview.carindale@example.test', notes: 'TEST DATA' },
+      { id: 2, name: 'Preview Guest McGregor Multi', contact_method: 'preview.mcgregor@example.test', notes: 'TEST DATA multi-room' },
+      { id: 3, name: 'Preview Guest Carindale R5', contact_method: 'preview.r5@example.test', notes: 'TEST DATA' }
     ],
     tenancies: [
       {
@@ -317,7 +317,8 @@ if (!html.includes('\nstart();\n</script>')) {
   console.error('Could not find start() call to override');
   process.exit(1);
 }
-html = html.replace('\nstart();\n</script>', `\n${startOverride}\n</script>`);
+// Leading semicolon avoids ASI gluing this IIFE onto `let start = async function(){...}`
+html = html.replace('\nstart();\n</script>', `\n;${startOverride}\n</script>`);
 
 // Neutralize hardcoded production endpoints in preview copy (defense in depth)
 html = html.replace(

@@ -15,17 +15,16 @@
 
 ## Preview URL
 
-**Live HTTPS (iPad):** https://slots-roger-scripting-growing.trycloudflare.com/
+**Live HTTPS (iPad, while this cloud agent tunnel is up):**  
+https://slots-roger-scripting-growing.trycloudflare.com/
 
-This Cloudflare quick tunnel stays up while the cloud agent preview server is running. After push, a durable GitHub CDN copy is also available (see agent summary).
+**Durable GitHub CDN copy (after this preview branch is pushed):**  
+https://cdn.jsdelivr.net/gh/Clararentalpm/Rental-pm@cursor/carindale-preview-aee1/Rental%20Management/safe-preview/index.html
 
-Rebuild locally:
+Alternate: https://raw.githack.com/Clararentalpm/Rental-pm/cursor/carindale-preview-aee1/Rental%20Management/safe-preview/index.html
 
-```bash
-cd "Rental Management"
-node build-safe-manual-preview.js
-python3 -m http.server 8765 -d safe-preview
-```
+This Cloudflare quick tunnel stays up while the cloud agent preview server is running.
+
 
 ## How to check (iPad)
 
@@ -61,7 +60,12 @@ Use Carindale tab. Check room labels:
 - Room 3 should include **Ensuite** in picker-style labels where used
 - Room 4 must **not**
 
-Pages: **Availability**, **Calendar**, **Room Status**, open **Book inspection** / room inspection flows, and **Find Room**.
+Where to look in this app:
+
+- **Room Status** → left nav **Overview** (section “Room status”)
+- **Calendar** → **Availability** → **Calendar View**
+- **Find Room** → **Availability** → **Vacancy View** → **Find a room**
+- **Book Room Inspection** → **Inspections** → **+ Book inspection**
 
 Test bookings included:
 

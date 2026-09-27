@@ -85,11 +85,20 @@ t.status='upcoming'; t.rent_treatment=undefined; t.deposit_treatment=undefined;
 assert('open past due is overdue', sandbox.paymentActionLiveStatus(S.paymentActions[0])==='overdue');
 assert('superseded not overdue', sandbox.isActionCountedInOverdue({status:'superseded',due_date:'2020-01-01'})===false);
 
-// TEST F: viewer cannot edit
-S.me={role:'viewer'};
-assert('viewer cannot edit', sandbox.canEdit()===false);
-S.me={role:'manager'};
+// TEST F: authorised holders (any role label) can edit; unauthorised cannot
+S.profiles=[{id:'u1',display_name:'Owner',role:'owner'},{id:'u2',display_name:'Viewer',role:'viewer'},{id:'u3',display_name:'Manager',role:'manager'}];
+S.me={id:'u2',display_name:'Viewer',role:'viewer'};
+assert('viewer label still full access when profile exists', sandbox.canEdit()===true);
+assert('viewer hasFullAppAccess', sandbox.hasFullAppAccess()===true);
+assert('viewer canManageStaff', sandbox.canManageStaff()===true);
+S.me={id:'u3',display_name:'Manager',role:'manager'};
 assert('manager can edit', sandbox.canEdit()===true);
+S.me={id:'ghost',display_name:'NoProfile',role:'viewer'};
+assert('no profiles row → cannot edit', sandbox.canEdit()===false);
+S.me=null;
+assert('signed-out me null → cannot edit', sandbox.canEdit()===false);
+S.me={id:'u1',display_name:'Owner',role:'owner'};
+assert('owner can edit', sandbox.canEdit()===true);
 
 assert('cancel dialog markup', html.includes('id="cancel-booking-dialog"'));
 assert('payment action dialog markup', html.includes('id="payment-action-dialog"'));

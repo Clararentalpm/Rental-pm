@@ -103,24 +103,26 @@ order by tablename, policyname;
 --   booking_financial_events_select_authenticated (SELECT)
 --   booking_financial_events_insert_staff (INSERT, owner/manager check)
 
--- G) Viewer cannot write (policy definition check)
--- Write policies must reference profiles.role in ('owner','manager').
+-- G) Authorised write guard (after supabase_authorised_full_access.sql)
+-- Writes require a profiles row for auth.uid(). Role labels no longer gate writes.
+-- Legacy (pre-migration) policies referenced profiles.role in ('owner','manager').
 select
   tablename,
   policyname,
   cmd,
   case
-    when qual ilike '%owner%' and qual ilike '%manager%' then 'OK staff-only USING'
-    when with_check ilike '%owner%' and with_check ilike '%manager%' then 'OK staff-only WITH CHECK'
+    when coalesce(qual,'') ilike '%profiles%' and coalesce(qual,'') ilike '%auth.uid%' then 'OK profile-membership USING'
+    when coalesce(with_check,'') ilike '%profiles%' and coalesce(with_check,'') ilike '%auth.uid%' then 'OK profile-membership WITH CHECK'
+    when qual ilike '%owner%' and qual ilike '%manager%' then 'LEGACY role USING — apply supabase_authorised_full_access.sql'
+    when with_check ilike '%owner%' and with_check ilike '%manager%' then 'LEGACY role WITH CHECK — apply supabase_authorised_full_access.sql'
     when cmd = 'SELECT' then 'OK select-all'
     else 'REVIEW'
-  end as viewer_write_guard
+  end as authorised_write_guard
 from pg_policies
 where schemaname = 'public'
   and tablename in ('payment_actions','payment_action_history','booking_financial_events')
 order by tablename, policyname;
 
--- H) Optional live probe (run while signed in as Viewer in SQL editor if desired):
--- insert into public.payment_actions (notes) values ('viewer probe');
--- Expect: fail / policy violation for Viewer.
--- delete from public.payment_actions where notes = 'viewer probe'; -- only if insert somehow succeeded
+-- H) Optional live probe:
+-- Signed-in user WITH profiles row: writes should succeed (any role label).
+-- Signed-in user WITHOUT profiles row / anon: writes must fail.

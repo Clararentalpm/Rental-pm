@@ -234,8 +234,14 @@ begin
 end;
 $$;
 
+-- Permissions: Postgres grants EXECUTE to PUBLIC by default on new functions.
+-- Explicitly strip PUBLIC/anon; allow only authenticated (JWT role). Staff gate is
+-- auth.uid() + profiles row inside the function (same as app canEdit), with
+-- SECURITY INVOKER so existing RLS is not bypassed.
+revoke all on function public.retain_bond_atomic(bigint, text, numeric, text, text, date) from public;
+revoke all on function public.retain_bond_atomic(bigint, text, numeric, text, text, date) from anon;
 grant execute on function public.retain_bond_atomic(bigint, text, numeric, text, text, date)
   to authenticated;
 
 comment on function public.retain_bond_atomic(bigint, text, numeric, text, text, date) is
-  'Atomic Retain Bond: updates bonds + inserts bond_refund_events in one transaction; idempotent via retain:* reference.';
+  'Atomic Retain Bond: updates bonds + inserts bond_refund_events in one transaction; idempotent via retain:* reference. SECURITY INVOKER; EXECUTE for authenticated only; requires profiles row.';

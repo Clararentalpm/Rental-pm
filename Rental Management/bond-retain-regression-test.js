@@ -765,11 +765,20 @@ function rpcDepsFromDb(db, opts = {}) {
     assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_atomic_VERIFY.sql')), 'verify sql');
     assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_atomic_ROLLBACK.sql')), 'rollback sql');
     assert(fs.existsSync(path.join(dir, 'BOND_RETAIN_ATOMIC_NOTES.md')), 'notes');
+    assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_isolated_harness.sql')), 'isolated harness');
+    assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_isolated_scenarios.sql')), 'isolated scenarios');
     const sql = fs.readFileSync(path.join(dir, 'supabase_bond_retain_atomic.sql'), 'utf8');
     assert(/create or replace function public\.retain_bond_atomic/i.test(sql), 'function');
+    assert(/security invoker/i.test(sql), 'invoker');
     assert(/for update/i.test(sql), 'row lock');
     assert(/bond_refund_events_retain_idempotency_uidx/i.test(sql), 'unique index');
+    assert(/revoke all on function[\s\S]*from public/i.test(sql), 'revoke public');
+    assert(/revoke all on function[\s\S]*from anon/i.test(sql), 'revoke anon');
+    assert(/grant execute[\s\S]*to authenticated/i.test(sql), 'grant authenticated');
+    assert(/exists \(select 1 from public\.profiles/i.test(sql), 'profiles authz');
     assert(/Do NOT auto-run/i.test(sql), 'no auto-run');
+    const verify = fs.readFileSync(path.join(dir, 'supabase_bond_retain_atomic_VERIFY.sql'), 'utf8');
+    assert(/PUBLIC.*anon|anon.*PUBLIC/i.test(verify) && /execute_acl_check/i.test(verify), 'verify ACL');
   });
 
   console.log(`\n${passed}/20 passed`);

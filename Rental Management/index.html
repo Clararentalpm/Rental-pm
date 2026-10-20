@@ -5185,6 +5185,58 @@ function bondRetainOptimisticFilter(b){
   const id=Number(b.id);
   return `id=eq.${id}&and=(${bondOutflowEqFilter('forfeited_amount',b.forfeited_amount)},${bondOutflowEqFilter('refund_amount',b.refund_amount)},${bondOutflowEqFilter('deduction_amount',b.deduction_amount)})`;
 }
+function newBondRetainIdempotencyKey(bondId){
+  return `retain:${Number(bondId)}:${Date.now()}:${Math.random().toString(36).slice(2,10)}`;
+}
+/**
+ * Apply retain with audit-first ordering so balance never changes without a history row.
+ * 1) Insert bond_refund_events (with idempotency reference)
+ * 2) Optimistic patch of bonds
+ * 3) If patch fails/conflicts, delete the history row (compensate) — balance unchanged, no double retain
+ * deps optional for tests: { insertEvent, patchBond, deleteEvent, logBooking }
+ */
+async function applyBondRetain(plan,freshBond,deps={}){
+  if(!plan?.ok)throw new Error(plan?.error||'Invalid retain plan.');
+  if(!freshBond?.id)throw new Error('Bond not found.');
+  const insertEvent=deps.insertEvent||(row=>insert('bond_refund_events',row));
+  const patchBond=deps.patchBond||((filter,row)=>patch('bonds',filter,row));
+  const deleteEvent=deps.deleteEvent||(id=>api('bond_refund_events',`id=eq.${id}`,{method:'DELETE'}));
+  const logBooking=deps.logBooking||(row=>logBookingEvent(row));
+  const idem=String(plan.event?.reference||'').trim()||newBondRetainIdempotencyKey(freshBond.id);
+  const eventPayload={...plan.event,reference:idem};
+  let eventRows;
+  try{
+    eventRows=await insertEvent(eventPayload);
+  }catch(ex){
+    throw new Error(ex.message||'Could not record retention history. Bond balance was not changed.');
+  }
+  const eventRow=Array.isArray(eventRows)?eventRows[0]:eventRows;
+  const eventId=eventRow?.id;
+  const compensateHistory=async()=>{
+    if(eventId==null||eventId==='')return false;
+    try{await deleteEvent(eventId);return true}catch(_){return false}
+  };
+  const filter=bondRetainOptimisticFilter(freshBond);
+  let patched;
+  try{
+    patched=await patchBond(filter,plan.patch);
+  }catch(ex){
+    const rolled=await compensateHistory();
+    throw new Error(
+      (ex.message||'Could not update bond retention.')+
+      (rolled?' History was rolled back; bond balance was not changed.':' History cleanup failed — verify no orphan retain event before retrying.')
+    );
+  }
+  if(!patched||(Array.isArray(patched)&&patched.length===0)){
+    const rolled=await compensateHistory();
+    throw new Error(
+      'Bond was changed by another action (refund, forfeit, or retain). '+
+      (rolled?'History was rolled back; retention was not applied. Reload and try again.':'History cleanup failed — verify no orphan retain event before retrying.')
+    );
+  }
+  await logBooking(plan.bookingEvent).catch(()=>{});
+  return {bond:patched[0]||patched,event:eventRow,reference:idem};
+}
 function refreshBondRetainSummary(){
   const f=$('#bond-retain-form');if(!f)return;
   const id=Number(f.elements.bond_id.value);
@@ -6121,33 +6173,6 @@ const bondRetainMode=$('#bond-retain-mode');
 const bondRetainAmount=$('#bond-retain-amount');
 if(bondRetainMode)bondRetainMode.addEventListener('change',()=>refreshBondRetainSummary());
 if(bondRetainAmount)bondRetainAmount.addEventListener('input',()=>refreshBondRetainSummary());
-/**
- * Apply a retain plan against a fresh bond row: optimistic patch first, then history.
- * Does not fall back to deduction_amount (would hide retention from bondRetainedTotal).
- */
-async function applyBondRetain(plan,freshBond){
-  if(!plan?.ok)throw new Error(plan?.error||'Invalid retain plan.');
-  if(!freshBond?.id)throw new Error('Bond not found.');
-  const id=Number(freshBond.id);
-  const filter=bondRetainOptimisticFilter(freshBond);
-  let patched;
-  try{
-    patched=await patch('bonds',filter,plan.patch);
-  }catch(ex){
-    throw new Error(ex.message||'Could not update bond retention. Retention was not recorded.');
-  }
-  if(!patched||(Array.isArray(patched)&&patched.length===0)){
-    throw new Error('Bond was changed by another action (refund, forfeit, or retain). Reload and try again — retention was not applied.');
-  }
-  try{
-    await insert('bond_refund_events',plan.event);
-  }catch(ex){
-    // Bond already updated — surface history failure without rolling back ledger (admin can see remaining/status).
-    throw new Error(`Bond retained, but history insert failed: ${ex.message||ex}. Reload to verify the balance.`);
-  }
-  await logBookingEvent(plan.bookingEvent).catch(()=>{});
-  return patched[0]||patched;
-}
 $('#bond-retain-form').onsubmit=async e=>{
   e.preventDefault();
   if(bondRetainBusy)return;

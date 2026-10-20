@@ -119,6 +119,16 @@ function check(name, fn) {
     process.exitCode = 1;
   }
 }
+async function checkAsync(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log('PASS', name);
+  } catch (e) {
+    console.error('FAIL', name, e.message);
+    process.exitCode = 1;
+  }
+}
 
 function seedBond(extra = {}) {
   Object.assign(sandbox.state, {
@@ -186,11 +196,16 @@ check('UI Retain Bond dialog + planBondRetain helper present', () => {
   assert(/applyBondRetain/.test(html), 'applyBondRetain');
   assert(/bondRetainOptimisticFilter/.test(html), 'optimistic filter');
   assert(/bondLedgerIdentity/.test(html), 'ledger identity helper');
+  assert(/newBondRetainIdempotencyKey/.test(html), 'idempotency key');
+  assert(/History was rolled back/.test(html), 'compensate history on patch failure');
   // Must not hide retention inside deduction_amount on failure (double-count / under-report risk).
   assert(
     !/deduction_amount:Number\(b\.deduction_amount\|\|0\)\+plan\.summary\.retainingNow/.test(html),
     'no retain→deduction fallback'
   );
+  // Audit-first: history insert before bond patch (balance never changes without history).
+  assert(/insertEvent\(eventPayload\)/.test(html), 'history insert via insertEvent');
+  assert(/Bond balance was not changed/.test(html), 'history-fail leaves balance unchanged');
 });
 
 check('Partial retention: amount, reason, staff, balance & status', () => {
@@ -568,6 +583,148 @@ check('Edit Bond / Cancel-forfeit validators still intact', () => {
   assert(!/insert\('rent_payments'[\s\S]{0,80}retain/i.test(html), 'retain does not invent rent_payments');
 });
 
-console.log(`\n${passed}/14 passed`);
-if (process.exitCode) process.exit(1);
-console.log('ALL PASS — retain bond');
+function mockRetainStore() {
+  return {
+    events: [],
+    nextEventId: 1,
+    bond: null,
+    deletedEventIds: [],
+  };
+}
+
+function depsFromStore(store, opts = {}) {
+  return {
+    insertEvent: async (row) => {
+      if (opts.failHistoryInsert) throw new Error('history insert boom');
+      const rec = { ...row, id: store.nextEventId++ };
+      store.events.push(rec);
+      return [rec];
+    },
+    patchBond: async (filter, row) => {
+      if (opts.failPatchThrow) throw new Error('patch boom');
+      if (opts.failPatchEmpty) return [];
+      Object.assign(store.bond, row);
+      return [{ ...store.bond }];
+    },
+    deleteEvent: async (id) => {
+      store.deletedEventIds.push(id);
+      store.events = store.events.filter((e) => Number(e.id) !== Number(id));
+      return [];
+    },
+    logBooking: async () => {},
+  };
+}
+
+(async () => {
+  await checkAsync('History-write failure: bond balance unchanged, no retain applied', async () => {
+    seedBond();
+    const store = mockRetainStore();
+    store.bond = { ...sandbox.state.bonds[0] };
+    const before = {
+      forfeited: Number(store.bond.forfeited_amount || 0),
+      remaining: sandbox.bondRemaining(store.bond),
+    };
+    const plan = sandbox.planBondRetain(store.bond, {
+      mode: 'partial',
+      amount: 100,
+      reason: 'Should not stick',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    });
+    assert(plan.ok, plan.error);
+    let threw = null;
+    try {
+      await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store, { failHistoryInsert: true }));
+    } catch (e) {
+      threw = e;
+    }
+    assert(!!threw, 'must throw');
+    assert(/not changed|history/i.test(threw.message), threw.message);
+    assert(store.events.length === 0, 'no history row');
+    assert(Number(store.bond.forfeited_amount || 0) === before.forfeited, 'forfeited unchanged');
+    assert(sandbox.bondRemaining(store.bond) === before.remaining, 'remaining unchanged');
+    // Retry after history outage must still be able to apply once (no double prior).
+    const ok = await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store));
+    assert(ok.reference, 'idempotency reference set');
+    assert(store.events.length === 1, 'one history after recovery');
+    assert(Number(store.bond.forfeited_amount) === 100, 'retained once');
+    assert(sandbox.bondRemaining(store.bond) === 400, 'remaining after one retain');
+  });
+
+  await checkAsync('Patch failure after history: history compensated, balance unchanged, retry safe', async () => {
+    seedBond();
+    const store = mockRetainStore();
+    store.bond = { ...sandbox.state.bonds[0] };
+    const plan = sandbox.planBondRetain(store.bond, {
+      mode: 'partial',
+      amount: 80,
+      reason: 'Patch conflict',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    });
+    let threw = null;
+    try {
+      await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store, { failPatchEmpty: true }));
+    } catch (e) {
+      threw = e;
+    }
+    assert(!!threw, 'must throw on empty patch');
+    assert(/rolled back|not applied/i.test(threw.message), threw.message);
+    assert(store.deletedEventIds.length === 1, 'history deleted');
+    assert(store.events.length === 0, 'no leftover history');
+    assert(Number(store.bond.forfeited_amount || 0) === 0, 'balance not retained');
+    // Safe retry applies exactly once
+    await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store));
+    assert(store.events.length === 1, 'single history');
+    assert(Number(store.bond.forfeited_amount) === 80, 'single retain');
+    const again = sandbox.planBondRetain(store.bond, {
+      mode: 'partial',
+      amount: 80,
+      reason: 'Second intentional',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-21',
+    });
+    await sandbox.applyBondRetain(again, store.bond, depsFromStore(store));
+    assert(Number(store.bond.forfeited_amount) === 160, 'second retain additive once each');
+    assert(store.events.length === 2, 'two history rows');
+    assert(sandbox.bondLedgerIdentity(store.bond).ok, 'identity');
+  });
+
+  await checkAsync('Happy path: history then balance, both recorded', async () => {
+    seedBond();
+    const store = mockRetainStore();
+    store.bond = { ...sandbox.state.bonds[0] };
+    const plan = sandbox.planBondRetain(store.bond, {
+      mode: 'full',
+      reason: 'Full retain audit-first',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    });
+    const order = [];
+    const deps = depsFromStore(store);
+    const wrapped = {
+      insertEvent: async (row) => {
+        order.push('history');
+        return deps.insertEvent(row);
+      },
+      patchBond: async (filter, row) => {
+        order.push('patch');
+        return deps.patchBond(filter, row);
+      },
+      deleteEvent: deps.deleteEvent,
+      logBooking: deps.logBooking,
+    };
+    const res = await sandbox.applyBondRetain(plan, store.bond, wrapped);
+    assert(order.join(',') === 'history,patch', `order ${order}`);
+    assert(store.events[0].action === 'retain_full', 'action');
+    assert(store.events[0].notes === 'Full retain audit-first', 'reason');
+    assert(store.events[0].created_by === 'staff-1', 'staff');
+    assert(/^retain:55:/.test(res.reference), `ref ${res.reference}`);
+    assert(Number(store.bond.forfeited_amount) === 500, 'full retained');
+    assert(sandbox.bondRemaining(store.bond) === 0, 'remaining 0');
+  });
+
+  console.log(`\n${passed}/17 passed`);
+  if (process.exitCode) process.exit(1);
+  console.log('ALL PASS — retain bond');
+})();

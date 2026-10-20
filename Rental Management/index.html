@@ -2516,6 +2516,7 @@ function planBondRetain(b,fields={}){
     original,
     alreadyRefunded,
     alreadyRetained,
+    alreadyDeducted,
     retainingNow:retainAmt,
     remainingAfter,
     currency,
@@ -5150,20 +5151,39 @@ function openBondAction(id){
   const f=$('#bond-action-form');f.reset();f.elements.bond_id.value=b.id;$('#bond-action-name').textContent=`Bond #${b.id} · remaining ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')} · ${b.refunded?'Refunded':'Not refunded'}`;
   $('#bond-action-dialog').showModal();
 }
+/** Ledger identity: original ≈ refunded + retained + deducted + remaining (no double-count). */
+function bondLedgerIdentity(b){
+  const original=Number(b?.amount||0);
+  const refunded=bondRefundedTotal(b);
+  const retained=bondRetainedTotal(b);
+  const deducted=Number(b?.deduction_amount||0);
+  const remaining=bondRemaining(b)??0;
+  const sum=refunded+retained+deducted+remaining;
+  return {original,refunded,retained,deducted,remaining,sum,ok:Math.abs(original-sum)<=0.009};
+}
 function formatBondRetainSummary(b,mode,amount){
   const cur=b.original_currency==='CNY'?'CNY':'AUD';
-  const original=Number(b.amount||0);
-  const alreadyRefunded=bondRefundedTotal(b);
-  const alreadyRetained=bondRetainedTotal(b);
-  const remaining=bondRemaining(b)??0;
+  const idn=bondLedgerIdentity(b);
+  const remaining=idn.remaining;
   const retaining=mode==='full'?remaining:Number(amount||0);
   const remainingAfter=Math.max(0,remaining-(Number.isFinite(retaining)?retaining:0));
   return `<div><b>Before confirmation</b></div>
-    <div>Original bond: <b>${esc(money(original,cur))}</b></div>
-    <div>Already refunded: <b>${esc(money(alreadyRefunded,cur))}</b></div>
-    <div>Already retained: <b>${esc(money(alreadyRetained,cur))}</b></div>
+    <div>Original bond: <b>${esc(money(idn.original,cur))}</b></div>
+    <div>Already refunded: <b>${esc(money(idn.refunded,cur))}</b></div>
+    <div>Already retained: <b>${esc(money(idn.retained,cur))}</b></div>
+    <div>Already deducted: <b>${esc(money(idn.deducted,cur))}</b></div>
     <div>Amount being retained now: <b>${esc(money(retaining>0?retaining:0,cur))}</b>${mode==='full'?' <span class="muted small">(full remaining)</span>':''}</div>
     <div>Remaining refundable after: <b>${esc(money(remainingAfter,cur))}</b></div>`;
+}
+/** PostgREST filter: treat null outflow columns as 0 for optimistic concurrency. */
+function bondOutflowEqFilter(col,n){
+  const v=Number(n||0);
+  if(v===0)return `or(${col}.eq.0,${col}.is.null)`;
+  return `${col}.eq.${v}`;
+}
+function bondRetainOptimisticFilter(b){
+  const id=Number(b.id);
+  return `id=eq.${id}&and=(${bondOutflowEqFilter('forfeited_amount',b.forfeited_amount)},${bondOutflowEqFilter('refund_amount',b.refund_amount)},${bondOutflowEqFilter('deduction_amount',b.deduction_amount)})`;
 }
 function refreshBondRetainSummary(){
   const f=$('#bond-retain-form');if(!f)return;
@@ -6101,60 +6121,88 @@ const bondRetainMode=$('#bond-retain-mode');
 const bondRetainAmount=$('#bond-retain-amount');
 if(bondRetainMode)bondRetainMode.addEventListener('change',()=>refreshBondRetainSummary());
 if(bondRetainAmount)bondRetainAmount.addEventListener('input',()=>refreshBondRetainSummary());
+/**
+ * Apply a retain plan against a fresh bond row: optimistic patch first, then history.
+ * Does not fall back to deduction_amount (would hide retention from bondRetainedTotal).
+ */
+async function applyBondRetain(plan,freshBond){
+  if(!plan?.ok)throw new Error(plan?.error||'Invalid retain plan.');
+  if(!freshBond?.id)throw new Error('Bond not found.');
+  const id=Number(freshBond.id);
+  const filter=bondRetainOptimisticFilter(freshBond);
+  let patched;
+  try{
+    patched=await patch('bonds',filter,plan.patch);
+  }catch(ex){
+    throw new Error(ex.message||'Could not update bond retention. Retention was not recorded.');
+  }
+  if(!patched||(Array.isArray(patched)&&patched.length===0)){
+    throw new Error('Bond was changed by another action (refund, forfeit, or retain). Reload and try again — retention was not applied.');
+  }
+  try{
+    await insert('bond_refund_events',plan.event);
+  }catch(ex){
+    // Bond already updated — surface history failure without rolling back ledger (admin can see remaining/status).
+    throw new Error(`Bond retained, but history insert failed: ${ex.message||ex}. Reload to verify the balance.`);
+  }
+  await logBookingEvent(plan.bookingEvent).catch(()=>{});
+  return patched[0]||patched;
+}
 $('#bond-retain-form').onsubmit=async e=>{
   e.preventDefault();
   if(bondRetainBusy)return;
+  bondRetainBusy=true;
   const f=e.currentTarget,fd=new FormData(f),err=$('#bond-retain-error');err.classList.add('hidden');
   const saveBtn=$('#bond-retain-save');
-  const id=Number(fd.get('bond_id'));
-  const b=state.bonds.find(x=>Number(x.id)===Number(id));
-  if(!b){err.textContent='Bond not found.';err.classList.remove('hidden');return}
-  if(!fd.get('confirm_retain')){err.textContent='Please confirm this retention before saving.';err.classList.remove('hidden');return}
-  const plan=planBondRetain(b,{
-    mode:fd.get('mode'),
-    amount:fd.get('amount'),
-    reason:fd.get('reason'),
-    staffId:getSession()?.user?.id||null,
-    retainedAt:today()
-  });
-  if(!plan.ok){err.textContent=plan.error;err.classList.remove('hidden');return}
-  const s=plan.summary;
-  const cur=s.currency==='CNY'?'CNY':'AUD';
-  const confirmMsg=[
-    `Confirm Retain Bond?`,
-    ``,
-    `Original bond: ${money(s.original,cur)}`,
-    `Already refunded: ${money(s.alreadyRefunded,cur)}`,
-    `Already retained: ${money(s.alreadyRetained,cur)}`,
-    `Retaining now: ${money(s.retainingNow,cur)}`,
-    `Remaining refundable after: ${money(s.remainingAfter,cur)}`,
-    ``,
-    `Reason: ${s.reason}`,
-    ``,
-    `This is an administrative record only — it does not transfer money.`
-  ].join('\n');
-  if(!confirm(confirmMsg))return;
-  bondRetainBusy=true;
   if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving…'}
   try{
-    await insert('bond_refund_events',plan.event);
-    try{await patch('bonds',`id=eq.${id}`,plan.patch)}
-    catch(_){
-      const fallback={
-        deduction_amount:Number(b.deduction_amount||0)+plan.summary.retainingNow,
-        deduction_reason:plan.summary.reason,
-        remaining_amount:plan.patch.remaining_amount,
-        remaining_description:plan.patch.remaining_description
-      };
-      await patch('bonds',`id=eq.${id}`,fallback);
-    }
-    await logBookingEvent(plan.bookingEvent).catch(()=>{});
+    const id=Number(fd.get('bond_id'));
+    if(!fd.get('confirm_retain')){throw new Error('Please confirm this retention before saving.')}
+    // Re-read bond so concurrent refund/forfeit/retain cannot overdraw from stale memory.
+    let fresh=null;
+    try{
+      const rows=await select('bonds',`id=eq.${id}&select=*`);
+      fresh=rows?.[0]||null;
+    }catch(_){fresh=null}
+    if(!fresh)fresh=state.bonds.find(x=>Number(x.id)===Number(id))||null;
+    if(!fresh)throw new Error('Bond not found.');
+    const plan=planBondRetain(fresh,{
+      mode:fd.get('mode'),
+      amount:fd.get('amount'),
+      reason:fd.get('reason'),
+      staffId:getSession()?.user?.id||null,
+      retainedAt:today()
+    });
+    if(!plan.ok)throw new Error(plan.error);
+    const s=plan.summary;
+    const cur=s.currency==='CNY'?'CNY':'AUD';
+    const deducted=Number(fresh.deduction_amount||0);
+    const confirmMsg=[
+      `Confirm Retain Bond?`,
+      ``,
+      `Original bond: ${money(s.original,cur)}`,
+      `Already refunded: ${money(s.alreadyRefunded,cur)}`,
+      `Already retained: ${money(s.alreadyRetained,cur)}`,
+      `Already deducted: ${money(deducted,cur)}`,
+      `Retaining now: ${money(s.retainingNow,cur)}`,
+      `Remaining refundable after: ${money(s.remainingAfter,cur)}`,
+      ``,
+      `Reason: ${s.reason}`,
+      ``,
+      `This is an administrative record only — it does not transfer money.`
+    ].join('\n');
+    if(!confirm(confirmMsg))return;
+    await applyBondRetain(plan,fresh);
+    // Keep local SoT in sync even before loadAll (and for optimistic-filter tests).
+    const idx=state.bonds.findIndex(x=>Number(x.id)===Number(id));
+    if(idx>=0)Object.assign(state.bonds[idx],plan.patch);
     $('#bond-retain-dialog').close();
     toast('Bond retention recorded');
     await loadAll();
   }catch(ex){
     err.textContent=ex.message||String(ex);
     err.classList.remove('hidden');
+    try{await loadAll()}catch(_){}
   }finally{
     bondRetainBusy=false;
     if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Confirm retain'}

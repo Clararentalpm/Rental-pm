@@ -183,6 +183,14 @@ check('UI Retain Bond dialog + planBondRetain helper present', () => {
   assert(/bondRetainBusy/.test(html), 'duplicate-submit lock');
   assert(/Administrative record only/.test(html) || /administrative retention only/i.test(html), 'admin-only note');
   assert(/retain_full/.test(html) && /retain_partial/.test(html), 'retain actions');
+  assert(/applyBondRetain/.test(html), 'applyBondRetain');
+  assert(/bondRetainOptimisticFilter/.test(html), 'optimistic filter');
+  assert(/bondLedgerIdentity/.test(html), 'ledger identity helper');
+  // Must not hide retention inside deduction_amount on failure (double-count / under-report risk).
+  assert(
+    !/deduction_amount:Number\(b\.deduction_amount\|\|0\)\+plan\.summary\.retainingNow/.test(html),
+    'no retain→deduction fallback'
+  );
 });
 
 check('Partial retention: amount, reason, staff, balance & status', () => {
@@ -377,7 +385,7 @@ check('Reason required; zero/negative amount blocked; full with nothing left blo
 });
 
 check('Summary fields exposed for confirmation UI', () => {
-  seedBond({ refund_amount: 80, forfeited_amount: 20 });
+  seedBond({ refund_amount: 80, forfeited_amount: 20, deduction_amount: 10 });
   const plan = sandbox.planBondRetain(sandbox.state.bonds[0], {
     mode: 'partial',
     amount: 50,
@@ -388,17 +396,178 @@ check('Summary fields exposed for confirmation UI', () => {
   assert(plan.summary.original === 500, 'original');
   assert(plan.summary.alreadyRefunded === 80, 'refunded');
   assert(plan.summary.alreadyRetained === 20, 'retained');
+  assert(plan.summary.alreadyDeducted === 10, 'deducted in summary');
   assert(plan.summary.retainingNow === 50, 'now');
-  assert(plan.summary.remainingAfter === 350, 'after');
+  assert(plan.summary.remainingAfter === 340, 'after accounts for deduction');
   assert(typeof sandbox.formatBondRetainSummary === 'function', 'format helper');
   const htmlSummary = sandbox.formatBondRetainSummary(sandbox.state.bonds[0], 'partial', 50);
   assert(/Original bond/.test(htmlSummary), 'original in summary');
   assert(/Already refunded/.test(htmlSummary), 'refunded in summary');
   assert(/Already retained/.test(htmlSummary), 'retained in summary');
+  assert(/Already deducted/.test(htmlSummary), 'deducted in summary');
   assert(/Amount being retained now/.test(htmlSummary), 'now in summary');
   assert(/Remaining refundable after/.test(htmlSummary), 'after in summary');
 });
 
-console.log(`\n${passed}/8 passed`);
+check('Ledger identity: original = refunded + retained + deducted + remaining', () => {
+  seedBond({ refund_amount: 100, forfeited_amount: 75, deduction_amount: 25 });
+  let idn = sandbox.bondLedgerIdentity(sandbox.state.bonds[0]);
+  assert(idn.ok, `pre ${JSON.stringify(idn)}`);
+  assert(idn.sum === 500, `sum ${idn.sum}`);
+  applyRetain(
+    sandbox.planBondRetain(sandbox.state.bonds[0], {
+      mode: 'partial',
+      amount: 50,
+      reason: 'Extra retain',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    })
+  );
+  idn = sandbox.bondLedgerIdentity(sandbox.state.bonds[0]);
+  assert(idn.ok, `post ${JSON.stringify(idn)}`);
+  assert(idn.retained === 125, 'retained cumulative');
+  assert(idn.refunded === 100, 'refund unchanged');
+  assert(idn.deducted === 25, 'deduction unchanged');
+  assert(idn.remaining === 250, `remaining ${idn.remaining}`);
+  // Reusing forfeited_amount must not invent a second retention bucket.
+  assert(sandbox.bondRetainedTotal(sandbox.state.bonds[0]) === sandbox.bondForfeited(sandbox.state.bonds[0]), 'alias');
+});
+
+check('Full retention after partial retention uses remaining only', () => {
+  seedBond();
+  applyRetain(
+    sandbox.planBondRetain(sandbox.state.bonds[0], {
+      mode: 'partial',
+      amount: 120,
+      reason: 'First partial',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    })
+  );
+  assert(sandbox.bondRemaining(sandbox.state.bonds[0]) === 380, 'after partial');
+  const full = sandbox.planBondRetain(sandbox.state.bonds[0], {
+    mode: 'full',
+    reason: 'Close remainder',
+    staffId: 'staff-1',
+    retainedAt: '2026-10-21',
+  });
+  assert(full.ok, full.error);
+  assert(full.summary.retainingNow === 380, 'full = remaining');
+  assert(full.patch.forfeited_amount === 500, '120+380');
+  applyRetain(full);
+  const idn = sandbox.bondLedgerIdentity(sandbox.state.bonds[0]);
+  assert(idn.ok && idn.remaining === 0 && idn.retained === 500, JSON.stringify(idn));
+  assert(sandbox.state.bondRefundEvents.length === 2, 'two history events');
+});
+
+check('Refund then retention: prior refund kept; retain from remaining', () => {
+  seedBond();
+  const b = sandbox.state.bonds[0];
+  b.refund_amount = 180;
+  b.remaining_amount = 320;
+  sandbox.state.bondRefundEvents.push({
+    bond_id: b.id,
+    action: 'partial_refund',
+    amount: 180,
+    currency: 'AUD',
+    notes: 'Partial refund first',
+    created_by: 'staff-1',
+    created_at: '2026-10-19T10:00:00.000Z',
+  });
+  assert(sandbox.bondRemaining(b) === 320, 'remaining after refund');
+  const plan = sandbox.planBondRetain(b, {
+    mode: 'partial',
+    amount: 100,
+    reason: 'Retain after refund',
+    staffId: 'staff-1',
+    retainedAt: '2026-10-20',
+  });
+  assert(plan.ok, plan.error);
+  assert(plan.summary.alreadyRefunded === 180, 'sees prior refund');
+  applyRetain(plan);
+  assert(sandbox.bondRefundedTotal(b) === 180, 'refund unchanged');
+  assert(sandbox.bondRetainedTotal(b) === 100, 'retained');
+  assert(sandbox.bondRemaining(b) === 220, 'remaining');
+  assert(sandbox.bondLedgerIdentity(b).ok, 'identity');
+  // Prior refund history row untouched.
+  assert(sandbox.state.bondRefundEvents[0].action === 'partial_refund', 'refund history kept');
+  assert(sandbox.state.bondRefundEvents[0].amount === 180, 'refund amount kept');
+});
+
+check('Existing deduction + prior forfeit: retain does not double-count', () => {
+  seedBond({
+    refund_amount: 50,
+    forfeited_amount: 100, // prior cancel/forfeit
+    deduction_amount: 40, // prior deduction action
+  });
+  const before = sandbox.bondLedgerIdentity(sandbox.state.bonds[0]);
+  assert(before.ok, JSON.stringify(before));
+  assert(before.remaining === 310, `remaining ${before.remaining}`);
+  const plan = sandbox.planBondRetain(sandbox.state.bonds[0], {
+    mode: 'partial',
+    amount: 60,
+    reason: 'Additional retain',
+    staffId: 'staff-1',
+    retainedAt: '2026-10-20',
+  });
+  assert(plan.ok, plan.error);
+  assert(plan.patch.forfeited_amount === 160, 'adds to existing forfeit/retain ledger');
+  assert(plan.summary.alreadyDeducted === 40, 'deduction visible');
+  applyRetain(plan);
+  const after = sandbox.bondLedgerIdentity(sandbox.state.bonds[0]);
+  assert(after.ok, JSON.stringify(after));
+  assert(after.deducted === 40, 'deduction not rewritten');
+  assert(after.refunded === 50, 'refund not rewritten');
+  assert(after.retained === 160 && after.remaining === 250, JSON.stringify(after));
+});
+
+check('Optimistic filter changes after retain; stale second plan overdraws blocked', () => {
+  seedBond();
+  const b = sandbox.state.bonds[0];
+  const filterBefore = sandbox.bondRetainOptimisticFilter(b);
+  assert(/id=eq\.55/.test(filterBefore), filterBefore);
+  assert(/forfeited_amount/.test(filterBefore), filterBefore);
+  const planA = sandbox.planBondRetain(b, {
+    mode: 'partial',
+    amount: 300,
+    reason: 'Tab A',
+    staffId: 'staff-1',
+    retainedAt: '2026-10-20',
+  });
+  const planBStale = sandbox.planBondRetain(b, {
+    mode: 'partial',
+    amount: 300,
+    reason: 'Tab B stale',
+    staffId: 'staff-1',
+    retainedAt: '2026-10-20',
+  });
+  assert(planA.ok && planBStale.ok, 'both plans ok on same snapshot');
+  applyRetain(planA);
+  const filterAfter = sandbox.bondRetainOptimisticFilter(b);
+  assert(filterBefore !== filterAfter, 'optimistic filter must change after retain');
+  // Re-plan from updated bond: cannot take another 300
+  const planBFresh = sandbox.planBondRetain(b, {
+    mode: 'partial',
+    amount: 300,
+    reason: 'Tab B fresh',
+    staffId: 'staff-1',
+  });
+  assert(planBFresh.ok === false, 'second 300 blocked after first applied');
+  assert(sandbox.bondLedgerIdentity(b).ok, 'identity after first');
+});
+
+check('Edit Bond / Cancel-forfeit validators still intact', () => {
+  seedBond({ refund_amount: 0, forfeited_amount: 0 });
+  assert(sandbox.validateBondAmountEdit(sandbox.state.bonds[0], 550) === '', 'edit up ok');
+  seedBond({ refund_amount: 200, forfeited_amount: 100 });
+  assert(!!sandbox.validateBondAmountEdit(sandbox.state.bonds[0], 250), 'edit below outflows blocked');
+  assert(sandbox.validateDepositSplit(300, 100, 200) === '', 'forfeit split ok');
+  assert(!!sandbox.validateDepositSplit(300, 150, 200), 'forfeit split over blocked');
+  assert(/forfeit_full/.test(html) && /forfeit_partial/.test(html), 'cancel forfeit actions remain');
+  assert(/planBondEdit/.test(html), 'edit bond remains');
+  assert(!/insert\('rent_payments'[\s\S]{0,80}retain/i.test(html), 'retain does not invent rent_payments');
+});
+
+console.log(`\n${passed}/14 passed`);
 if (process.exitCode) process.exit(1);
 console.log('ALL PASS — retain bond');

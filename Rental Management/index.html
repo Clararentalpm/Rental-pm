@@ -443,7 +443,8 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 <dialog id="bond-retain-dialog"><form id="bond-retain-form" class="dialog-body">
   <div class="dialog-head"><div><h2>Retain Bond</h2><div id="bond-retain-name" class="muted small"></div></div><button type="button" class="close" data-close="bond-retain-dialog">×</button></div>
   <input type="hidden" name="bond_id">
-  <div class="note" style="margin-top:12px">Administrative record only — does not transfer money or change a live payment outside the app. Existing refund records stay unchanged.</div>
+  <input type="hidden" name="idempotency_key" id="bond-retain-idempotency" value="">
+  <div class="note" style="margin-top:12px">Administrative record only — does not transfer money or change a live payment outside the app. Existing refund records stay unchanged. Requires database function <code>retain_bond_atomic</code> (see supabase_bond_retain_atomic.sql).</div>
   <div id="bond-retain-summary" class="note" style="margin-top:12px"></div>
   <div class="form-grid" style="margin-top:14px">
     <label>Retention type<select name="mode" id="bond-retain-mode"><option value="partial">Partial retention</option><option value="full">Full retention (remaining balance)</option></select></label>
@@ -5188,54 +5189,131 @@ function bondRetainOptimisticFilter(b){
 function newBondRetainIdempotencyKey(bondId){
   return `retain:${Number(bondId)}:${Date.now()}:${Math.random().toString(36).slice(2,10)}`;
 }
+function isAmbiguousRetainNetworkError(ex){
+  if(!ex)return false;
+  if(ex.name==='AbortError')return true;
+  const m=String(ex.message||ex);
+  return /timeout|abort|network|failed to fetch|Load failed|NetworkError|ECONNRESET|temporar/i.test(m);
+}
+function isRetainRpcMissingError(ex){
+  const m=String(ex?.message||ex||'');
+  return /404|PGRST202|could not find.*(function|retain_bond_atomic)|retain_bond_atomic.*does not exist/i.test(m);
+}
 /**
- * Apply retain with audit-first ordering so balance never changes without a history row.
- * 1) Insert bond_refund_events (with idempotency reference)
- * 2) Optimistic patch of bonds
- * 3) If patch fails/conflicts, delete the history row (compensate) — balance unchanged, no double retain
- * deps optional for tests: { insertEvent, patchBond, deleteEvent, logBooking }
+ * Pure in-memory simulator of retain_bond_atomic (one "transaction").
+ * Used by regression tests — mirrors SQL: lock → idempotent check → insert history → update bond.
+ */
+function simulateRetainBondAtomic(db,args={}){
+  const key=String(args.p_idempotency_key||'').trim();
+  const bondId=Number(args.p_bond_id);
+  if(!key||!key.startsWith('retain:'))return {ok:false,error:'idempotency_key required (retain:...)'};
+  if(!String(args.p_reason||'').trim())return {ok:false,error:'reason required'};
+  const existing=(db.events||[]).find(e=>e.reference===key);
+  if(existing){
+    const b=(db.bonds||[]).find(x=>Number(x.id)===Number(existing.bond_id));
+    return {ok:true,replayed:true,bond:b,event:existing,reference:key,retaining_now:existing.amount,remaining_after:bondRemaining(b)};
+  }
+  const bond=(db.bonds||[]).find(x=>Number(x.id)===bondId);
+  if(!bond)return {ok:false,error:'Bond not found'};
+  const plan=planBondRetain(bond,{
+    mode:args.p_mode,
+    amount:args.p_amount,
+    reason:args.p_reason,
+    staffId:args.p_staff_id||db.authUid||null,
+    retainedAt:args.p_retained_at||null
+  });
+  if(!plan.ok)return {ok:false,error:plan.error};
+  // Snapshot; commit only if both writes succeed (no compensating delete).
+  const event={...plan.event,reference:key,id:(db.nextEventId=(db.nextEventId||1))};
+  const bondCopy={...bond,...plan.patch};
+  if(args._failAfterHistoryBeforeBond){
+    return {ok:false,error:'simulated mid-txn failure',committed:false};
+  }
+  db.events.push(event);
+  Object.assign(bond,plan.patch);
+  db.nextEventId=event.id+1;
+  return {
+    ok:true,
+    replayed:false,
+    bond:{...bond},
+    event,
+    reference:key,
+    retaining_now:plan.summary.retainingNow,
+    remaining_after:plan.summary.remainingAfter,
+    committed:true
+  };
+}
+/**
+ * Apply retain via ONE database RPC transaction (retain_bond_atomic).
+ * Durable idempotency_key: retries / ambiguous network recoveries never double-apply.
+ * Does NOT compensate by deleting history after a suspected success.
+ * deps: { callRpc, findEventByReference, fetchBond, isAmbiguousNetworkError }
  */
 async function applyBondRetain(plan,freshBond,deps={}){
   if(!plan?.ok)throw new Error(plan?.error||'Invalid retain plan.');
   if(!freshBond?.id)throw new Error('Bond not found.');
-  const insertEvent=deps.insertEvent||(row=>insert('bond_refund_events',row));
-  const patchBond=deps.patchBond||((filter,row)=>patch('bonds',filter,row));
-  const deleteEvent=deps.deleteEvent||(id=>api('bond_refund_events',`id=eq.${id}`,{method:'DELETE'}));
-  const logBooking=deps.logBooking||(row=>logBookingEvent(row));
-  const idem=String(plan.event?.reference||'').trim()||newBondRetainIdempotencyKey(freshBond.id);
-  const eventPayload={...plan.event,reference:idem};
-  let eventRows;
-  try{
-    eventRows=await insertEvent(eventPayload);
-  }catch(ex){
-    throw new Error(ex.message||'Could not record retention history. Bond balance was not changed.');
-  }
-  const eventRow=Array.isArray(eventRows)?eventRows[0]:eventRows;
-  const eventId=eventRow?.id;
-  const compensateHistory=async()=>{
-    if(eventId==null||eventId==='')return false;
-    try{await deleteEvent(eventId);return true}catch(_){return false}
+  const idem=String(deps.idempotencyKey||plan.event?.reference||'').trim()||newBondRetainIdempotencyKey(freshBond.id);
+  if(!idem.startsWith('retain:'))throw new Error('Invalid retain idempotency key.');
+  const callRpc=deps.callRpc||(body=>api('rpc/retain_bond_atomic','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)}));
+  const findEventByReference=deps.findEventByReference||(ref=>select('bond_refund_events',`reference=eq.${encodeURIComponent(ref)}&select=*&limit=1`));
+  const fetchBond=deps.fetchBond||(id=>select('bonds',`id=eq.${id}&select=*`));
+  const ambiguous=deps.isAmbiguousNetworkError||isAmbiguousRetainNetworkError;
+  const payload={
+    p_bond_id:Number(freshBond.id),
+    p_mode:plan.summary.mode,
+    p_amount:plan.summary.retainingNow,
+    p_reason:plan.summary.reason,
+    p_idempotency_key:idem,
+    p_retained_at:deps.retainedAt||today()
   };
-  const filter=bondRetainOptimisticFilter(freshBond);
-  let patched;
+  const normalize=result=>{
+    const row=Array.isArray(result)?result[0]:result;
+    if(!row||row.ok===false)throw new Error(row?.error||'Retain Bond RPC failed.');
+    return {
+      ok:true,
+      replayed:!!row.replayed,
+      bond:row.bond||null,
+      event:row.event||null,
+      reference:row.reference||idem,
+      retaining_now:row.retaining_now,
+      remaining_after:row.remaining_after,
+      ambiguousRecovered:!!row.ambiguousRecovered
+    };
+  };
+  const recoverByKey=async()=>{
+    const rows=await findEventByReference(idem);
+    const ev=Array.isArray(rows)?rows[0]:rows;
+    if(!ev)return null;
+    const bonds=await fetchBond(ev.bond_id);
+    const b=Array.isArray(bonds)?bonds[0]:bonds;
+    return normalize({ok:true,replayed:true,ambiguousRecovered:true,bond:b,event:ev,reference:idem,retaining_now:ev.amount,remaining_after:b?bondRemaining(b):null});
+  };
   try{
-    patched=await patchBond(filter,plan.patch);
+    const result=await callRpc(payload);
+    return normalize(result);
   }catch(ex){
-    const rolled=await compensateHistory();
-    throw new Error(
-      (ex.message||'Could not update bond retention.')+
-      (rolled?' History was rolled back; bond balance was not changed.':' History cleanup failed — verify no orphan retain event before retrying.')
-    );
+    if(isRetainRpcMissingError(ex)){
+      throw new Error('Retain Bond requires database migration supabase_bond_retain_atomic.sql (function retain_bond_atomic). Apply it in Supabase SQL Editor, then retry. Bond was not changed.');
+    }
+    if(ambiguous(ex)){
+      try{
+        const recovered=await recoverByKey();
+        if(recovered)return recovered;
+      }catch(_){/* fall through */}
+      // Not committed (or lookup failed): safe to retry with the SAME idempotency key.
+      const err=new Error('Network error while retaining bond. If you retry, use the same request — it will not apply twice. Bond was not confirmed changed.');
+      err.code='RETAIN_AMBIGUOUS';
+      err.idempotencyKey=idem;
+      err.cause=ex;
+      throw err;
+    }
+    // Definitive failure — attempt read in case server committed before error body was lost
+    try{
+      const recovered=await recoverByKey();
+      if(recovered)return recovered;
+    }catch(_){}
+    throw ex;
   }
-  if(!patched||(Array.isArray(patched)&&patched.length===0)){
-    const rolled=await compensateHistory();
-    throw new Error(
-      'Bond was changed by another action (refund, forfeit, or retain). '+
-      (rolled?'History was rolled back; retention was not applied. Reload and try again.':'History cleanup failed — verify no orphan retain event before retrying.')
-    );
-  }
-  await logBooking(plan.bookingEvent).catch(()=>{});
-  return {bond:patched[0]||patched,event:eventRow,reference:idem};
 }
 function refreshBondRetainSummary(){
   const f=$('#bond-retain-form');if(!f)return;
@@ -5262,6 +5340,7 @@ function openBondRetain(id){
   if(rem<=0){alert('Nothing left to retain on this bond.');return}
   const f=$('#bond-retain-form');f.reset();
   f.elements.bond_id.value=b.id;
+  f.elements.idempotency_key.value=newBondRetainIdempotencyKey(b.id);
   f.elements.mode.value='partial';
   f.elements.amount.value='';
   f.elements.amount.readOnly=false;
@@ -6217,16 +6296,23 @@ $('#bond-retain-form').onsubmit=async e=>{
       `This is an administrative record only — it does not transfer money.`
     ].join('\n');
     if(!confirm(confirmMsg))return;
-    await applyBondRetain(plan,fresh);
-    // Keep local SoT in sync even before loadAll (and for optimistic-filter tests).
+    const idem=String(fd.get('idempotency_key')||'').trim()||newBondRetainIdempotencyKey(id);
+    f.elements.idempotency_key.value=idem; // keep same key across ambiguous retries
+    const applied=await applyBondRetain(plan,fresh,{idempotencyKey:idem,retainedAt:today()});
     const idx=state.bonds.findIndex(x=>Number(x.id)===Number(id));
-    if(idx>=0)Object.assign(state.bonds[idx],plan.patch);
+    if(idx>=0){
+      if(applied.bond&&typeof applied.bond==='object')Object.assign(state.bonds[idx],applied.bond);
+      else Object.assign(state.bonds[idx],plan.patch);
+    }
+    // Mint a fresh key only after confirmed success (next open regenerates anyway).
+    f.elements.idempotency_key.value=newBondRetainIdempotencyKey(id);
     $('#bond-retain-dialog').close();
-    toast('Bond retention recorded');
+    toast(applied.replayed?'Bond retention already recorded (idempotent retry)':'Bond retention recorded');
     await loadAll();
   }catch(ex){
     err.textContent=ex.message||String(ex);
     err.classList.remove('hidden');
+    // Keep idempotency_key so retry cannot double-apply after ambiguous network errors.
     try{await loadAll()}catch(_){}
   }finally{
     bondRetainBusy=false;

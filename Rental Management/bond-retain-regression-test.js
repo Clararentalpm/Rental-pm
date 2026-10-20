@@ -194,18 +194,19 @@ check('UI Retain Bond dialog + planBondRetain helper present', () => {
   assert(/Administrative record only/.test(html) || /administrative retention only/i.test(html), 'admin-only note');
   assert(/retain_full/.test(html) && /retain_partial/.test(html), 'retain actions');
   assert(/applyBondRetain/.test(html), 'applyBondRetain');
-  assert(/bondRetainOptimisticFilter/.test(html), 'optimistic filter');
+  assert(/simulateRetainBondAtomic/.test(html), 'atomic simulator');
+  assert(/retain_bond_atomic/.test(html), 'RPC name');
+  assert(/supabase_bond_retain_atomic\.sql/.test(html), 'migration prerequisite referenced');
   assert(/bondLedgerIdentity/.test(html), 'ledger identity helper');
   assert(/newBondRetainIdempotencyKey/.test(html), 'idempotency key');
-  assert(/History was rolled back/.test(html), 'compensate history on patch failure');
-  // Must not hide retention inside deduction_amount on failure (double-count / under-report risk).
+  assert(/isAmbiguousRetainNetworkError/.test(html), 'ambiguous network helper');
+  // Must not hide retention inside deduction_amount; must not compensate-delete after success.
   assert(
     !/deduction_amount:Number\(b\.deduction_amount\|\|0\)\+plan\.summary\.retainingNow/.test(html),
     'no retain→deduction fallback'
   );
-  // Audit-first: history insert before bond patch (balance never changes without history).
-  assert(/insertEvent\(eventPayload\)/.test(html), 'history insert via insertEvent');
-  assert(/Bond balance was not changed/.test(html), 'history-fail leaves balance unchanged');
+  assert(!/deleteEvent\(eventId\)/.test(html), 'no compensating history delete');
+  assert(/rpc\/retain_bond_atomic/.test(html), 'single RPC path');
 });
 
 check('Partial retention: amount, reason, staff, balance & status', () => {
@@ -583,148 +584,195 @@ check('Edit Bond / Cancel-forfeit validators still intact', () => {
   assert(!/insert\('rent_payments'[\s\S]{0,80}retain/i.test(html), 'retain does not invent rent_payments');
 });
 
-function mockRetainStore() {
+function atomicDbFromBond(bond) {
   return {
+    bonds: [bond],
     events: [],
     nextEventId: 1,
-    bond: null,
-    deletedEventIds: [],
+    authUid: 'staff-1',
   };
 }
 
-function depsFromStore(store, opts = {}) {
+function rpcDepsFromDb(db, opts = {}) {
+  const keyCalls = { rpc: 0, lookup: 0 };
   return {
-    insertEvent: async (row) => {
-      if (opts.failHistoryInsert) throw new Error('history insert boom');
-      const rec = { ...row, id: store.nextEventId++ };
-      store.events.push(rec);
-      return [rec];
+    keyCalls,
+    idempotencyKey: opts.idempotencyKey,
+    retainedAt: '2026-10-20',
+    callRpc: async (body) => {
+      keyCalls.rpc++;
+      if (opts.rpcMissing) {
+        const e = new Error('Could not find the function public.retain_bond_atomic');
+        e.status = 404;
+        throw e;
+      }
+      // Ambiguous: server commits, client sees network failure (no compensating delete).
+      if (opts.ambiguousAfterCommit && keyCalls.rpc === 1) {
+        const committed = sandbox.simulateRetainBondAtomic(db, body);
+        assert(committed.ok && committed.committed, committed.error || 'commit');
+        const err = new Error('Failed to fetch');
+        err.name = 'TypeError';
+        throw err;
+      }
+      if (opts.ambiguousBeforeCommit && keyCalls.rpc === 1) {
+        const err = new Error('Request timed out. Please wait and retry once.');
+        err.name = 'AbortError';
+        throw err;
+      }
+      const result = sandbox.simulateRetainBondAtomic(db, body);
+      if (!result.ok) throw new Error(result.error);
+      return result;
     },
-    patchBond: async (filter, row) => {
-      if (opts.failPatchThrow) throw new Error('patch boom');
-      if (opts.failPatchEmpty) return [];
-      Object.assign(store.bond, row);
-      return [{ ...store.bond }];
+    findEventByReference: async (ref) => {
+      keyCalls.lookup++;
+      return db.events.filter((e) => e.reference === ref);
     },
-    deleteEvent: async (id) => {
-      store.deletedEventIds.push(id);
-      store.events = store.events.filter((e) => Number(e.id) !== Number(id));
-      return [];
-    },
-    logBooking: async () => {},
+    fetchBond: async (id) => db.bonds.filter((x) => Number(x.id) === Number(id)),
+    isAmbiguousNetworkError: sandbox.isAmbiguousRetainNetworkError,
   };
 }
 
 (async () => {
-  await checkAsync('History-write failure: bond balance unchanged, no retain applied', async () => {
+  await checkAsync('Atomic simulator: history+balance commit together; mid-txn aborts both', async () => {
     seedBond();
-    const store = mockRetainStore();
-    store.bond = { ...sandbox.state.bonds[0] };
-    const before = {
-      forfeited: Number(store.bond.forfeited_amount || 0),
-      remaining: sandbox.bondRemaining(store.bond),
-    };
-    const plan = sandbox.planBondRetain(store.bond, {
+    const bond = sandbox.state.bonds[0];
+    const db = atomicDbFromBond({ ...bond });
+    const key = 'retain:55:test-atomic-1';
+    const fail = sandbox.simulateRetainBondAtomic(db, {
+      p_bond_id: 55,
+      p_mode: 'partial',
+      p_amount: 100,
+      p_reason: 'abort',
+      p_idempotency_key: key,
+      p_retained_at: '2026-10-20',
+      _failAfterHistoryBeforeBond: true,
+    });
+    assert(fail.ok === false && fail.committed === false, 'simulated abort');
+    assert(db.events.length === 0, 'no history on abort');
+    assert(Number(db.bonds[0].forfeited_amount || 0) === 0, 'no balance on abort');
+    const ok = sandbox.simulateRetainBondAtomic(db, {
+      p_bond_id: 55,
+      p_mode: 'partial',
+      p_amount: 100,
+      p_reason: 'ok',
+      p_idempotency_key: key,
+      p_retained_at: '2026-10-20',
+    });
+    assert(ok.ok && ok.committed, ok.error);
+    assert(db.events.length === 1 && Number(db.bonds[0].forfeited_amount) === 100, 'both committed');
+  });
+
+  await checkAsync('Durable idempotency: same key retries once; no double retain', async () => {
+    seedBond();
+    const db = atomicDbFromBond({ ...sandbox.state.bonds[0] });
+    const key = 'retain:55:idem-stable';
+    const plan = sandbox.planBondRetain(db.bonds[0], {
       mode: 'partial',
-      amount: 100,
-      reason: 'Should not stick',
+      amount: 90,
+      reason: 'Once',
       staffId: 'staff-1',
       retainedAt: '2026-10-20',
     });
-    assert(plan.ok, plan.error);
+    const deps = rpcDepsFromDb(db, { idempotencyKey: key });
+    const first = await sandbox.applyBondRetain(plan, db.bonds[0], deps);
+    assert(first.replayed === false, 'first apply');
+    const second = await sandbox.applyBondRetain(plan, db.bonds[0], deps);
+    assert(second.replayed === true, 'second is replay');
+    assert(db.events.length === 1, 'one history');
+    assert(Number(db.bonds[0].forfeited_amount) === 90, 'retained once');
+    assert(deps.keyCalls.rpc === 2, 'rpc called twice');
+  });
+
+  await checkAsync('Ambiguous network after server commit: recover by key, no delete, no double apply', async () => {
+    seedBond();
+    const db = atomicDbFromBond({ ...sandbox.state.bonds[0] });
+    const key = 'retain:55:ambiguous-commit';
+    const plan = sandbox.planBondRetain(db.bonds[0], {
+      mode: 'partial',
+      amount: 120,
+      reason: 'Ambiguous',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    });
+    const deps = rpcDepsFromDb(db, { idempotencyKey: key, ambiguousAfterCommit: true });
+    const recovered = await sandbox.applyBondRetain(plan, db.bonds[0], deps);
+    assert(recovered.ambiguousRecovered === true, 'recovered');
+    assert(recovered.replayed === true, 'treated as replay');
+    assert(db.events.length === 1, 'history kept');
+    assert(Number(db.bonds[0].forfeited_amount) === 120, 'balance kept');
+    // Explicit retry with same key must not add again
+    const deps2 = rpcDepsFromDb(db, { idempotencyKey: key });
+    const retry = await sandbox.applyBondRetain(plan, db.bonds[0], deps2);
+    assert(retry.replayed === true, 'retry replayed');
+    assert(db.events.length === 1, 'still one history');
+    assert(Number(db.bonds[0].forfeited_amount) === 120, 'still once');
+  });
+
+  await checkAsync('Ambiguous network before commit: error, retry with same key applies once', async () => {
+    seedBond();
+    const db = atomicDbFromBond({ ...sandbox.state.bonds[0] });
+    const key = 'retain:55:ambiguous-pre';
+    const plan = sandbox.planBondRetain(db.bonds[0], {
+      mode: 'partial',
+      amount: 70,
+      reason: 'Timeout before commit',
+      staffId: 'staff-1',
+      retainedAt: '2026-10-20',
+    });
+    const deps = rpcDepsFromDb(db, { idempotencyKey: key, ambiguousBeforeCommit: true });
     let threw = null;
     try {
-      await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store, { failHistoryInsert: true }));
+      await sandbox.applyBondRetain(plan, db.bonds[0], deps);
     } catch (e) {
       threw = e;
     }
-    assert(!!threw, 'must throw');
-    assert(/not changed|history/i.test(threw.message), threw.message);
-    assert(store.events.length === 0, 'no history row');
-    assert(Number(store.bond.forfeited_amount || 0) === before.forfeited, 'forfeited unchanged');
-    assert(sandbox.bondRemaining(store.bond) === before.remaining, 'remaining unchanged');
-    // Retry after history outage must still be able to apply once (no double prior).
-    const ok = await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store));
-    assert(ok.reference, 'idempotency reference set');
-    assert(store.events.length === 1, 'one history after recovery');
-    assert(Number(store.bond.forfeited_amount) === 100, 'retained once');
-    assert(sandbox.bondRemaining(store.bond) === 400, 'remaining after one retain');
+    assert(!!threw && threw.code === 'RETAIN_AMBIGUOUS', threw && threw.message);
+    assert(db.events.length === 0, 'nothing committed');
+    assert(Number(db.bonds[0].forfeited_amount || 0) === 0, 'balance unchanged');
+    const deps2 = rpcDepsFromDb(db, { idempotencyKey: key });
+    const ok = await sandbox.applyBondRetain(plan, db.bonds[0], deps2);
+    assert(ok.replayed === false, 'first real commit');
+    assert(db.events.length === 1 && Number(db.bonds[0].forfeited_amount) === 70, 'applied once');
   });
 
-  await checkAsync('Patch failure after history: history compensated, balance unchanged, retry safe', async () => {
+  await checkAsync('Missing RPC migration: clear prerequisite error, no writes', async () => {
     seedBond();
-    const store = mockRetainStore();
-    store.bond = { ...sandbox.state.bonds[0] };
-    const plan = sandbox.planBondRetain(store.bond, {
+    const db = atomicDbFromBond({ ...sandbox.state.bonds[0] });
+    const plan = sandbox.planBondRetain(db.bonds[0], {
       mode: 'partial',
-      amount: 80,
-      reason: 'Patch conflict',
+      amount: 50,
+      reason: 'Need migration',
       staffId: 'staff-1',
       retainedAt: '2026-10-20',
     });
+    const deps = rpcDepsFromDb(db, { idempotencyKey: 'retain:55:need-sql', rpcMissing: true });
     let threw = null;
     try {
-      await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store, { failPatchEmpty: true }));
+      await sandbox.applyBondRetain(plan, db.bonds[0], deps);
     } catch (e) {
       threw = e;
     }
-    assert(!!threw, 'must throw on empty patch');
-    assert(/rolled back|not applied/i.test(threw.message), threw.message);
-    assert(store.deletedEventIds.length === 1, 'history deleted');
-    assert(store.events.length === 0, 'no leftover history');
-    assert(Number(store.bond.forfeited_amount || 0) === 0, 'balance not retained');
-    // Safe retry applies exactly once
-    await sandbox.applyBondRetain(plan, store.bond, depsFromStore(store));
-    assert(store.events.length === 1, 'single history');
-    assert(Number(store.bond.forfeited_amount) === 80, 'single retain');
-    const again = sandbox.planBondRetain(store.bond, {
-      mode: 'partial',
-      amount: 80,
-      reason: 'Second intentional',
-      staffId: 'staff-1',
-      retainedAt: '2026-10-21',
-    });
-    await sandbox.applyBondRetain(again, store.bond, depsFromStore(store));
-    assert(Number(store.bond.forfeited_amount) === 160, 'second retain additive once each');
-    assert(store.events.length === 2, 'two history rows');
-    assert(sandbox.bondLedgerIdentity(store.bond).ok, 'identity');
+    assert(!!threw, 'throws');
+    assert(/supabase_bond_retain_atomic\.sql|retain_bond_atomic/i.test(threw.message), threw.message);
+    assert(db.events.length === 0 && Number(db.bonds[0].forfeited_amount || 0) === 0, 'no writes');
   });
 
-  await checkAsync('Happy path: history then balance, both recorded', async () => {
-    seedBond();
-    const store = mockRetainStore();
-    store.bond = { ...sandbox.state.bonds[0] };
-    const plan = sandbox.planBondRetain(store.bond, {
-      mode: 'full',
-      reason: 'Full retain audit-first',
-      staffId: 'staff-1',
-      retainedAt: '2026-10-20',
-    });
-    const order = [];
-    const deps = depsFromStore(store);
-    const wrapped = {
-      insertEvent: async (row) => {
-        order.push('history');
-        return deps.insertEvent(row);
-      },
-      patchBond: async (filter, row) => {
-        order.push('patch');
-        return deps.patchBond(filter, row);
-      },
-      deleteEvent: deps.deleteEvent,
-      logBooking: deps.logBooking,
-    };
-    const res = await sandbox.applyBondRetain(plan, store.bond, wrapped);
-    assert(order.join(',') === 'history,patch', `order ${order}`);
-    assert(store.events[0].action === 'retain_full', 'action');
-    assert(store.events[0].notes === 'Full retain audit-first', 'reason');
-    assert(store.events[0].created_by === 'staff-1', 'staff');
-    assert(/^retain:55:/.test(res.reference), `ref ${res.reference}`);
-    assert(Number(store.bond.forfeited_amount) === 500, 'full retained');
-    assert(sandbox.bondRemaining(store.bond) === 0, 'remaining 0');
+  check('Migration files prepared for review (not auto-run)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const dir = __dirname;
+    assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_atomic.sql')), 'forward sql');
+    assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_atomic_VERIFY.sql')), 'verify sql');
+    assert(fs.existsSync(path.join(dir, 'supabase_bond_retain_atomic_ROLLBACK.sql')), 'rollback sql');
+    assert(fs.existsSync(path.join(dir, 'BOND_RETAIN_ATOMIC_NOTES.md')), 'notes');
+    const sql = fs.readFileSync(path.join(dir, 'supabase_bond_retain_atomic.sql'), 'utf8');
+    assert(/create or replace function public\.retain_bond_atomic/i.test(sql), 'function');
+    assert(/for update/i.test(sql), 'row lock');
+    assert(/bond_refund_events_retain_idempotency_uidx/i.test(sql), 'unique index');
+    assert(/Do NOT auto-run/i.test(sql), 'no auto-run');
   });
 
-  console.log(`\n${passed}/17 passed`);
+  console.log(`\n${passed}/20 passed`);
   if (process.exitCode) process.exit(1);
   console.log('ALL PASS — retain bond');
 })();

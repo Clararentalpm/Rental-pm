@@ -456,6 +456,23 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
   <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-retain-dialog">Cancel</button><button class="btn primary" id="bond-retain-save">Confirm retain</button></div>
 </form></dialog>
 
+<dialog id="bond-refund-retained-dialog"><form id="bond-refund-retained-form" class="dialog-body">
+  <div class="dialog-head"><div><h2>Refund from retained bond</h2><div id="bond-refund-retained-name" class="muted small"></div></div><button type="button" class="close" data-close="bond-refund-retained-dialog">×</button></div>
+  <input type="hidden" name="bond_id">
+  <input type="hidden" name="idempotency_key" value="">
+  <div class="note" style="margin-top:12px">Administrative record only — does not transfer money. Reduces net retained and increases refunded total. Original Retain history is kept. Bond stays closed when remaining is already $0. Requires <code>refund_retained_bond_atomic</code>.</div>
+  <div id="bond-refund-retained-summary" class="note" style="margin-top:12px"></div>
+  <div class="form-grid" style="margin-top:14px">
+    <label>Amount to refund from retained<input name="amount" id="bond-refund-retained-amount" type="number" step="0.01" min="0.01" required></label>
+    <label>Method<input name="method" placeholder="Transfer / Cash / EFT"></label>
+    <label>Reference<input name="reference" placeholder="Bank / receipt ref (optional)"></label>
+  </div>
+  <label style="margin-top:12px">Reason (required)<textarea name="reason" rows="3" required placeholder="Why is part of the retained bond being refunded?"></textarea></label>
+  <label style="margin-top:12px;display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="confirm_refund_retained" required style="margin-top:4px"><span>I confirm this administrative refund-from-retained ledger update (no automatic bank transfer).</span></label>
+  <div id="bond-refund-retained-error" class="error hidden"></div>
+  <div class="dialog-actions"><button type="button" class="btn ghost" data-close="bond-refund-retained-dialog">Cancel</button><button class="btn primary" id="bond-refund-retained-save">Confirm refund</button></div>
+</form></dialog>
+
 <dialog id="invite-dialog"><form id="invite-form" class="dialog-body">
   <div class="dialog-head"><div><h2>Invite staff / sub-account</h2><div class="muted small">Any authorised account holder can invite. The invitee receives an email to set their password. Stored role labels are for history only — all authorised holders get full app access. If they do not receive the email, use Resend link from Staff Access.</div></div><button type="button" class="close" data-close="invite-dialog">×</button></div>
   <div class="form-grid" style="margin-top:14px">
@@ -2465,12 +2482,75 @@ function validateDepositSplit(original,refunded,forfeited){
 function bondActionLabel(action){
   const map={
     retain_full:'Retain full',retain_partial:'Retain partial',
+    refund_retained:'Refund from retained',
     forfeit_full:'Forfeit / retain full',forfeit_partial:'Forfeit / retain partial',
     full_refund:'Full refund',partial_refund:'Partial refund',
     mark_refunded:'Mark refunded',mark_not_refunded:'Mark not refunded',
     deduction:'Deduction',note:'Note',edit_bond:'Edit bond'
   };
   return map[action]||String(action||'').replaceAll('_',' ');
+}
+/**
+ * Pure plan: refund from currently retained (forfeited) balance.
+ * Example: amount 100, retained 100 → refund 30 ⇒ retained 70, refunded 30, remaining 0.
+ * Must NOT use ordinary remaining-based partial_refund.
+ */
+function planBondRefundRetained(b,fields={}){
+  if(!b||!b.id)return {ok:false,error:'Bond not found.'};
+  const reason=String(fields.reason||'').trim();
+  if(!reason)return {ok:false,error:'A reason is required.'};
+  const original=Number(b.amount||0);
+  const alreadyRefunded=bondRefundedTotal(b);
+  const alreadyRetained=bondRetainedTotal(b);
+  const alreadyDeducted=Number(b.deduction_amount||0);
+  const amt=Number(fields.amount);
+  if(!Number.isFinite(amt)||amt<=0)return {ok:false,error:'Enter an amount greater than zero.'};
+  if(alreadyRetained<=0)return {ok:false,error:'Nothing retained to refund on this bond.'};
+  if(amt>alreadyRetained+0.009)return {ok:false,error:`Cannot refund more than currently retained (${alreadyRetained}).`};
+  const newRetained=alreadyRetained-amt;
+  const newRefunded=alreadyRefunded+amt;
+  if(newRefunded+newRetained+alreadyDeducted>original+0.009){
+    return {ok:false,error:'Refunded + retained cannot exceed the original bond.'};
+  }
+  const remainingAfter=Math.max(0,original-newRefunded-newRetained-alreadyDeducted);
+  let deposit_status;
+  if(newRetained>0&&newRefunded>0)deposit_status='Partial forfeit / partial refund';
+  else if(newRetained>0)deposit_status='Forfeited / Retained';
+  else if(newRefunded+0.009>=original)deposit_status='Refunded';
+  else deposit_status='Partial forfeit / partial refund';
+  const currency=b.original_currency||b.currency||'AUD';
+  const method=String(fields.method||'').trim()||null;
+  const reference=String(fields.reference||'').trim()||null;
+  const staffId=fields.staffId||null;
+  const notes=reference?`${reason}\nREFUND_REFERENCE:${reference}`:reason;
+  return {
+    ok:true,
+    error:null,
+    summary:{
+      original,alreadyRefunded,alreadyRetained,alreadyDeducted,
+      refundingNow:amt,retainedAfter:newRetained,refundedAfter:newRefunded,
+      remainingAfter,currency,reason,method,reference
+    },
+    patch:{
+      forfeited_amount:newRetained,
+      refund_amount:newRefunded,
+      refunded:remainingAfter<=0&&newRefunded>0,
+      refunded_date:remainingAfter<=0&&newRefunded>0?(fields.refundedAt||null):b.refunded_date||null,
+      deposit_status,
+      remaining_amount:remainingAfter,
+      remaining_description:`Refund from retained ${amt}; net retained ${newRetained}; refunded total ${newRefunded}; remaining ${remainingAfter}`
+    },
+    event:{
+      bond_id:b.id,
+      action:'refund_retained',
+      amount:amt,
+      currency,
+      method,
+      reference:null, // idempotency key set by apply path
+      notes,
+      created_by:staffId
+    }
+  };
 }
 /**
  * Pure plan for Retain Bond — administrative retention only (no money transfer).
@@ -4096,10 +4176,11 @@ function bondsPage(){
   const historyRows=all;
   const totals=openBondTotalsByCurrency();
   const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
-  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?'<button id="add-bond" class="btn primary">+ Add bond / deposit</button>':''}</div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?`<div class="tenant-actions"><button id="add-bond" class="btn primary">+ Add bond / deposit</button><button id="add-bond-past" class="btn ghost">+ Record bond for past stay</button></div>`:''}</div>
   <div class="tenant-tools"><div class="view-switch"><button class="${filter==='open'?'active':''}" data-bfilter="open">Open (${openRows.length})</button><button class="${filter==='closed'?'active':''}" data-bfilter="closed">Refunded / Closed (${closedRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${bondRetainedTotal(b)>0?`<div class="muted small">Retained ${money(bondRetainedTotal(b),cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}">Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button>${canEdit()?`<button class="btn danger delete-bond" data-bond="${b.id}">Delete</button>`:''}</div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
-  <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed). Retentions show date, amount, reason and staff.</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes / Reason</th><th>Staff</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(bondActionLabel(e.action))}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td><td>${esc(staffLabel(e.created_by))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>`;
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);const retainedNow=bondRetainedTotal(b);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${retainedNow>0?`<div class="muted small">Retained ${money(retainedNow,cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled title="No remaining balance — use Refund from retained if applicable"':''}>Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-refund-retained" data-bond="${b.id}" ${retainedNow<=0?'disabled':''}>Refund from retained</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn danger delete-bond" data-bond="${b.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
+  <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed). Retentions and refunds-from-retained show date, amount, reason and staff.</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes / Reason</th><th>Staff</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(bondActionLabel(e.action))}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td><td>${esc(staffLabel(e.created_by))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>
+  ${canEdit()?`<section class="panel"><div class="panel-head"><h2>Recently deleted bonds (archive)</h2><div class="muted small">Soft-deleted bonds can be restored once. Existing permanently deleted history from before this feature is not recoverable.</div></div><div id="bond-archive-list" class="muted small">Loading archives…</div></section>`:''}`;
 }
 function pricingPage(){
   const roomIds=new Set(currentPropertyRooms().map(r=>r.id)), rows=state.priceHistory.filter(x=>roomIds.has(x.room_id));
@@ -4145,8 +4226,11 @@ function render(){
   $$('.record-due-payment').forEach(b=>b.onclick=()=>openPayment(Number(b.dataset.tenancy),b.dataset.action));
   $$('.edit-payment').forEach(b=>b.onclick=()=>openEditPayment(Number(b.dataset.payment)));
   const ab=$('#add-bond');if(ab)ab.onclick=()=>openBond();
+  const abp=$('#add-bond-past');if(abp)abp.onclick=()=>openBondForPastStay();
   $$('.bond-action').forEach(b=>b.onclick=()=>openBondAction(Number(b.dataset.bond)));
   $$('.bond-retain').forEach(b=>b.onclick=()=>openBondRetain(Number(b.dataset.bond)));
+  $$('.bond-refund-retained').forEach(b=>b.onclick=()=>openBondRefundRetained(Number(b.dataset.bond)));
+  if(state.page==='bonds')loadBondArchivesPanel();
   $$('.edit-bond').forEach(b=>b.onclick=()=>openBondEdit(Number(b.dataset.bond)));
   $$('.bond-mark-refunded').forEach(b=>b.onclick=()=>setBondRefundedStatus(Number(b.dataset.bond),true));
   $$('.bond-mark-not-refunded').forEach(b=>b.onclick=()=>setBondRefundedStatus(Number(b.dataset.bond),false));
@@ -4271,8 +4355,18 @@ function render(){
   $$('.role-select').forEach(s=>s.onchange=()=>changeRole(s.dataset.user,s.value));
 }
 
-function tenancyOptions(){
-  return scopedTenancies().filter(t=>tenancyKind(t)!=='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`).join('');
+function tenancyOptions({includeHistorical=false,historicalOnly=false}={}){
+  const rows=scopedTenancies().filter(t=>{
+    const hist=tenancyKind(t)==='historical';
+    if(historicalOnly)return hist;
+    if(includeHistorical)return true;
+    return !hist;
+  });
+  return rows.map(t=>{
+    const hist=tenancyKind(t)==='historical';
+    const label=`${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}${hist?' (past stay)':''}`;
+    return `<option value="${t.id}">${label}</option>`;
+  }).join('');
 }
 function fillViewingPropertyRooms(f,{propertyId,roomIds,roomId}={}){
   const pid=Number(propertyId||f.elements.property_id.value||state.propertyId);
@@ -4824,29 +4918,41 @@ function openEditPayment(id){
   f.elements.tenancy_id.onchange=null;
   $('#payment-dialog').showModal();
 }
-function openBond(){
+function openBond({pastStay=false}={}){
   const f=$('#bond-form');f.reset();
   if(f.elements.id)f.elements.id.value='';
   if(f.elements.tenancy_id)f.elements.tenancy_id.disabled=false;
-  const title=$('#bond-dialog-title');if(title)title.textContent='Record bond / deposit';
-  const sub=$('#bond-dialog-sub');if(sub){sub.textContent='Creates one bond record for the selected stay.';sub.classList.remove('hidden')}
+  f.dataset.pastStay=pastStay?'1':'0';
+  const title=$('#bond-dialog-title');
+  if(title)title.textContent=pastStay?'Record bond for past stay':'Record bond / deposit';
+  const sub=$('#bond-dialog-sub');
+  if(sub){
+    sub.textContent=pastStay
+      ?'Select an existing historical stay. Stay dates are not changed. Enter the real original bond details from records — nothing is invented, and deleted action history is not recreated.'
+      :'Creates one bond record for the selected stay.';
+    sub.classList.remove('hidden');
+  }
   const warn=$('#bond-edit-warning');if(warn){warn.classList.add('hidden');warn.textContent=''}
   const reasonLabel=$('#bond-edit-reason-label');if(reasonLabel)reasonLabel.classList.add('hidden');
   if(f.elements.edit_reason)f.elements.edit_reason.value='';
   if(f.elements.reference)f.elements.reference.value='';
-  f.elements.tenancy_id.innerHTML=tenancyOptions();
-  f.elements.received_date.value=today();
-  const saveBtn=$('#bond-save-btn');if(saveBtn)saveBtn.textContent='Save bond';
+  f.elements.tenancy_id.innerHTML=pastStay
+    ?tenancyOptions({historicalOnly:true})||'<option value="">No historical stays on this property</option>'
+    :tenancyOptions();
+  f.elements.received_date.value=''; // staff must enter real paid date from records
+  if(!pastStay)f.elements.received_date.value=today();
+  const saveBtn=$('#bond-save-btn');if(saveBtn)saveBtn.textContent=pastStay?'Save past-stay bond':'Save bond';
   $('#bond-error').classList.add('hidden');
   $('#bond-dialog').showModal();
 }
+function openBondForPastStay(){openBond({pastStay:true})}
 function openBondEdit(id){
   if(!canEdit())return;
   const b=state.bonds.find(x=>Number(x.id)===Number(id)); if(!b)return;
   const f=$('#bond-form'); f.reset();
   if(f.elements.id) f.elements.id.value=String(b.id);
   // Include historical tenancies so Edit Bond still resolves the linked stay.
-  f.elements.tenancy_id.innerHTML=tenancyOptions()+scopedTenancies().filter(t=>tenancyKind(t)==='historical').map(t=>`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))} (past)</option>`).join('');
+  f.elements.tenancy_id.innerHTML=tenancyOptions({includeHistorical:true});
   if(b.tenancy_id&&![...f.elements.tenancy_id.options].some(o=>Number(o.value)===Number(b.tenancy_id))){
     const t=state.tenancies.find(x=>Number(x.id)===Number(b.tenancy_id));
     if(t)f.elements.tenancy_id.insertAdjacentHTML('beforeend',`<option value="${t.id}">${esc(tenantBy(t.tenant_id)?.name||'Tenant')} · ${esc(roomLabel(t.room_id))}</option>`);
@@ -4894,25 +5000,72 @@ async function deleteBond(id){
   if(!canEdit()){alert('Authorised account required to delete bond / deposit history.');return}
   const b=state.bonds.find(x=>Number(x.id)===Number(id));
   if(!b)return;
-  const hist=(state.bondRefundEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length + (state.bondEvents||[]).filter(e=>Number(e.bond_id)===Number(id)).length;
-  const warn=hist?`\n\nWARNING: ${hist} related refund/payment/action history row(s) exist and will also be removed to avoid orphans.`:'';
-  if(!confirm(`Delete this ${b.bond_type||'bond / deposit'} record (${money(b.amount,b.original_currency==='CNY'?'CNY':'AUD')})?${warn}\n\nThis cannot be undone.`))return;
+  const refundEv=(state.bondRefundEvents||[]).filter(e=>Number(e.bond_id)===Number(id));
+  const payEv=(state.bondEvents||[]).filter(e=>Number(e.bond_id)===Number(id));
+  const cur=b.original_currency==='CNY'?'CNY':'AUD';
+  const detail=[
+    `Bond #${b.id} · ${b.bond_type||'bond'} · original ${money(b.amount,cur)}`,
+    `Remaining ${money(bondRemaining(b),cur)} · Retained ${money(bondRetainedTotal(b),cur)} · Refunded ${money(bondRefundedTotal(b),cur)}`,
+    `${refundEv.length} bond action history row(s) and ${payEv.length} bond payment event row(s) will leave the live tables.`,
+    'A recoverable archive snapshot is created first (when archive_and_delete_bond is installed).',
+    'Type DELETE BOND to confirm. This is not a silent undelete of older hard-deletes.'
+  ].join('\n');
+  const phrase=prompt(`${detail}\n\nType DELETE BOND to confirm deletion:`);
+  if(phrase==null)return;
+  if(String(phrase).trim()!=='DELETE BOND'){alert('Deletion cancelled — confirmation phrase did not match.');return}
   try{
-    // Child records must be removed first because they reference bonds.id.
-    await api('bond_refund_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
-    await api('bond_payment_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
-    await api('bonds',`id=eq.${id}`,{method:'DELETE'});
+    const callRpc=body=>api('rpc/archive_and_delete_bond','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)});
+    try{
+      const result=await callRpc({p_bond_id:Number(id),p_confirm_phrase:'DELETE BOND'});
+      const row=Array.isArray(result)?result[0]:result;
+      if(!row||row.ok===false)throw new Error(row?.error||'Archive delete failed');
+      toast(`Bond archived (token ${row.restore_token}). Restore from Recently deleted bonds if needed.`);
+    }catch(rpcEx){
+      const m=String(rpcEx?.message||rpcEx||'');
+      if(!/404|PGRST202|archive_and_delete_bond|does not exist/i.test(m))throw rpcEx;
+      // Fallback when migration not yet applied: hard delete with explicit warning
+      if(!confirm('Archive RPC is not installed yet. Continue with permanent hard delete (no undo)?'))return;
+      await api('bond_refund_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
+      await api('bond_payment_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
+      await api('bonds',`id=eq.${id}`,{method:'DELETE'});
+      toast('Bond permanently deleted (no archive — apply migration for undo)');
+    }
     state.bondRefundEvents=state.bondRefundEvents.filter(x=>Number(x.bond_id)!==Number(id));
     state.bondEvents=state.bondEvents.filter(x=>Number(x.bond_id)!==Number(id));
     state.bonds=state.bonds.filter(x=>Number(x.id)!==Number(id));
-    toast('Bond / deposit history deleted');
     await loadAll();
-    // Audit is best-effort and uses the real database column user_id.
     const uid=getSession()?.user?.id||null;
     insert('activity_log',{user_id:uid,action:'delete_bond',entity_type:'bond',entity_id:Number(id),details:{amount:b.amount,tenancy_id:b.tenancy_id,type:b.bond_type}}).catch(()=>{});
   }catch(e){
     alert('Could not delete this bond / deposit history: '+e.message);
   }
+}
+async function loadBondArchivesPanel(){
+  const box=$('#bond-archive-list');if(!box||!canEdit())return;
+  try{
+    const rows=await api('bond_deletion_archives','select=id,original_bond_id,deleted_at,restore_token,restored_at,restored_bond_id,bond_snapshot&restored_at=is.null&order=deleted_at.desc&limit=20');
+    const list=Array.isArray(rows)?rows:[];
+    if(!list.length){box.textContent='No unrestored archives on this project.';return}
+    box.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Deleted</th><th>Original bond</th><th>Amount</th><th>Action</th></tr></thead><tbody>${list.map(a=>{
+      const snap=a.bond_snapshot||{};
+      const cur=snap.original_currency==='CNY'?'CNY':(snap.currency||'AUD');
+      return `<tr><td>${a.deleted_at?new Date(a.deleted_at).toLocaleString('en-AU'):'—'}</td><td>#${esc(a.original_bond_id)}</td><td>${money(snap.amount,cur)}</td><td><button type="button" class="btn ghost restore-bond-archive" data-token="${esc(a.restore_token)}">Restore</button></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+    $$('.restore-bond-archive').forEach(btn=>btn.onclick=()=>restoreArchivedBond(btn.dataset.token));
+  }catch(e){
+    box.textContent='Archive table not available yet (apply supabase_refund_retained_and_bond_archive.sql). Older hard-deleted history is not listed here.';
+  }
+}
+async function restoreArchivedBond(token){
+  if(!canEdit()||!token)return;
+  if(!confirm('Restore this archived bond as a NEW bond record with its archived action history? Original stay dates are not changed.'))return;
+  try{
+    const result=await api('rpc/restore_archived_bond','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify({p_restore_token:token})});
+    const row=Array.isArray(result)?result[0]:result;
+    if(!row||row.ok===false)throw new Error(row?.error||'Restore failed');
+    toast(`Bond restored as #${row.restored_bond_id} (from archive of #${row.original_bond_id})`);
+    await loadAll();
+  }catch(e){alert('Could not restore archived bond: '+e.message)}
 }
 function openTenant(id){
   const t=tenantBy(id),f=$('#tenant-form');if(!t)return;
@@ -5314,6 +5467,168 @@ async function applyBondRetain(plan,freshBond,deps={}){
     }catch(_){}
     throw ex;
   }
+}
+function newBondRefundRetainedIdempotencyKey(bondId){
+  const rand=(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+  return `refund-retained:${Number(bondId)}:${rand}`;
+}
+function isRefundRetainedRpcMissingError(ex){
+  const m=String(ex?.message||ex||'');
+  return /404|PGRST202|could not find.*(function|refund_retained_bond_atomic)|refund_retained_bond_atomic.*does not exist/i.test(m);
+}
+/**
+ * Pure in-memory simulator of refund_retained_bond_atomic (one "transaction").
+ * Mirrors SQL: lock → idempotent check → insert history → update bond outflows.
+ */
+function simulateRefundRetainedBondAtomic(db,args={}){
+  const key=String(args.p_idempotency_key||'').trim();
+  const bondId=Number(args.p_bond_id);
+  if(!key||!key.startsWith('refund-retained:'))return {ok:false,error:'idempotency_key required (refund-retained:...)'};
+  if(!String(args.p_reason||'').trim())return {ok:false,error:'reason required'};
+  const existing=(db.events||[]).find(e=>e.reference===key);
+  if(existing){
+    const b=(db.bonds||[]).find(x=>Number(x.id)===Number(existing.bond_id));
+    return {
+      ok:true,replayed:true,bond:b,event:existing,reference:key,
+      refunding_now:existing.amount,
+      retained_after:bondRetainedTotal(b||{}),
+      refunded_after:bondRefundedTotal(b||{}),
+      remaining_after:bondRemaining(b||{})
+    };
+  }
+  const bond=(db.bonds||[]).find(x=>Number(x.id)===bondId);
+  if(!bond)return {ok:false,error:'Bond not found'};
+  const plan=planBondRefundRetained(bond,{
+    amount:args.p_amount,
+    reason:args.p_reason,
+    method:args.p_method,
+    reference:args.p_client_reference||args.p_reference||'',
+    staffId:args.p_staff_id||db.authUid||null,
+    refundedAt:args.p_refunded_at||null
+  });
+  if(!plan.ok)return {ok:false,error:plan.error};
+  const event={...plan.event,reference:key,id:(db.nextEventId=(db.nextEventId||1)),created_at:new Date().toISOString()};
+  if(args._failAfterHistoryBeforeBond){
+    return {ok:false,error:'simulated mid-txn failure',committed:false};
+  }
+  db.events.push(event);
+  Object.assign(bond,plan.patch);
+  db.nextEventId=event.id+1;
+  return {
+    ok:true,replayed:false,bond:{...bond},event,reference:key,
+    refunding_now:plan.summary.refundingNow,
+    retained_after:plan.summary.retainedAfter,
+    refunded_after:plan.summary.refundedAfter,
+    remaining_after:plan.summary.remainingAfter,
+    committed:true
+  };
+}
+/**
+ * Apply refund-from-retained via ONE database RPC (refund_retained_bond_atomic).
+ * Never deletes history after a suspected success; recover by idempotency key.
+ */
+async function applyBondRefundRetained(bond,fields={},deps={}){
+  const plan=planBondRefundRetained(bond,fields);
+  if(!plan.ok)throw new Error(plan.error);
+  const idem=String(fields.idempotencyKey||deps.idempotencyKey||'').trim();
+  if(!idem||!idem.startsWith('refund-retained:'))throw new Error('Missing refund-retained idempotency key.');
+  const callRpc=deps.callRpc||(body=>api('rpc/refund_retained_bond_atomic','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)}));
+  const findEventByReference=deps.findEventByReference||(ref=>api('bond_refund_events',`reference=eq.${encodeURIComponent(ref)}&select=*&limit=1`));
+  const fetchBond=deps.fetchBond||(id=>api('bonds',`id=eq.${id}&select=*&limit=1`));
+  const ambiguous=ex=>{
+    const m=String(ex?.message||ex||'');
+    return /network|Failed to fetch|TypeError|timeout|abort|502|503|504|ECONNRESET|fetch failed/i.test(m);
+  };
+  const payload={
+    p_bond_id:Number(bond.id),
+    p_amount:plan.summary.refundingNow,
+    p_reason:plan.summary.reason,
+    p_method:plan.summary.method,
+    p_reference:plan.summary.reference,
+    p_idempotency_key:idem,
+    p_refunded_at:deps.refundedAt||today()
+  };
+  const normalize=result=>{
+    const row=Array.isArray(result)?result[0]:result;
+    if(!row||row.ok===false)throw new Error(row?.error||'Refund from retained RPC failed.');
+    return {
+      ok:true,
+      replayed:!!row.replayed,
+      bond:row.bond||null,
+      event:row.event||null,
+      reference:row.reference||idem,
+      refunding_now:row.refunding_now,
+      retained_after:row.retained_after,
+      refunded_after:row.refunded_after,
+      remaining_after:row.remaining_after,
+      ambiguousRecovered:!!row.ambiguousRecovered
+    };
+  };
+  const recoverByKey=async()=>{
+    const rows=await findEventByReference(idem);
+    const ev=Array.isArray(rows)?rows[0]:rows;
+    if(!ev)return null;
+    const bonds=await fetchBond(ev.bond_id);
+    const b=Array.isArray(bonds)?bonds[0]:bonds;
+    return normalize({
+      ok:true,replayed:true,ambiguousRecovered:true,bond:b,event:ev,reference:idem,
+      refunding_now:ev.amount,
+      retained_after:b?bondRetainedTotal(b):null,
+      refunded_after:b?bondRefundedTotal(b):null,
+      remaining_after:b?bondRemaining(b):null
+    });
+  };
+  try{
+    return normalize(await callRpc(payload));
+  }catch(ex){
+    if(isRefundRetainedRpcMissingError(ex)){
+      throw new Error('Refund from retained requires database migration supabase_refund_retained_and_bond_archive.sql (function refund_retained_bond_atomic). Bond was not changed.');
+    }
+    if(ambiguous(ex)){
+      try{const recovered=await recoverByKey();if(recovered)return recovered;}catch(_){}
+      const err=new Error('Network error while refunding from retained bond. Retry with the same request — it will not apply twice. Bond was not confirmed changed.');
+      err.code='REFUND_RETAINED_AMBIGUOUS';
+      err.idempotencyKey=idem;
+      err.cause=ex;
+      throw err;
+    }
+    try{const recovered=await recoverByKey();if(recovered)return recovered;}catch(_){}
+    throw ex;
+  }
+}
+function formatBondRefundRetainedSummary(b,amount){
+  const plan=planBondRefundRetained(b,{amount,reason:'_',method:null,reference:null});
+  if(!plan.ok)return `<b>Cannot plan:</b> ${esc(plan.error)}`;
+  const s=plan.summary;const cur=s.currency==='CNY'?'CNY':'AUD';
+  return `Original ${esc(money(s.original,cur))} · Currently retained ${esc(money(s.alreadyRetained,cur))} · Already refunded ${esc(money(s.alreadyRefunded,cur))}<br>`
+    +`<b>Refunding from retained now:</b> ${esc(money(s.refundingNow,cur))}<br>`
+    +`Net retained after: ${esc(money(s.retainedAfter,cur))} · Refunded total: ${esc(money(s.refundedAfter,cur))} · Remaining: ${esc(money(s.remainingAfter,cur))} (bond stays closed when remaining is $0)`;
+}
+function refreshBondRefundRetainedSummary(){
+  const f=$('#bond-refund-retained-form');if(!f)return;
+  const id=Number(f.elements.bond_id.value);
+  const b=state.bonds.find(x=>Number(x.id)===Number(id));if(!b)return;
+  const box=$('#bond-refund-retained-summary');
+  if(box)box.innerHTML=formatBondRefundRetainedSummary(b,f.elements.amount.value);
+}
+function openBondRefundRetained(id){
+  if(!canEdit())return;
+  const b=state.bonds.find(x=>Number(x.id)===Number(id));if(!b)return;
+  const retained=bondRetainedTotal(b);
+  if(retained<=0){alert('Nothing retained to refund on this bond.');return}
+  const f=$('#bond-refund-retained-form');f.reset();
+  f.elements.bond_id.value=b.id;
+  f.elements.idempotency_key.value=newBondRefundRetainedIdempotencyKey(b.id);
+  f.elements.amount.value='';
+  f.elements.method.value='';
+  f.elements.reference.value='';
+  f.elements.reason.value='';
+  f.elements.confirm_refund_retained.checked=false;
+  const cur=b.original_currency==='CNY'?'CNY':'AUD';
+  $('#bond-refund-retained-name').textContent=`Bond #${b.id} · ${tenantBy(state.tenancies.find(t=>Number(t.id)===Number(b.tenancy_id))?.tenant_id)?.name||'Tenant'} · retained ${money(retained,cur)} · remaining ${money(bondRemaining(b),cur)}`;
+  $('#bond-refund-retained-error').classList.add('hidden');
+  refreshBondRefundRetainedSummary();
+  $('#bond-refund-retained-dialog').showModal();
 }
 function refreshBondRetainSummary(){
   const f=$('#bond-retain-form');if(!f)return;
@@ -5734,24 +6049,41 @@ $('#bond-form').onsubmit=async e=>{
       }).catch(()=>{});
       toast('Bond updated — same record corrected');
     }else{
+      const tid=Number(fd.get('tenancy_id'));
+      if(!tid){err.textContent='Select a stay.';err.classList.remove('hidden');return}
+      const stay=state.tenancies.find(x=>Number(x.id)===tid);
+      if(!stay){err.textContent='Stay not found.';err.classList.remove('hidden');return}
+      const pastStay=f.dataset.pastStay==='1'||tenancyKind(stay)==='historical';
+      if(pastStay&&tenancyKind(stay)!=='historical'){
+        err.textContent='Past-stay bond recording requires a historical stay.';err.classList.remove('hidden');return;
+      }
+      const existingBond=bondForTenancy(tid);
+      if(existingBond){
+        err.textContent=`This stay already has bond #${existingBond.id}. Edit that record instead of creating a duplicate.`;
+        err.classList.remove('hidden');return;
+      }
+      const amount=Number(fd.get('amount'));
+      if(!Number.isFinite(amount)||amount<=0){err.textContent='Enter the real original bond amount from records.';err.classList.remove('hidden');return}
+      const paidDate=String(fd.get('received_date')||'').trim();
+      if(pastStay&&!paidDate){err.textContent='Enter the real bond paid date from records (do not invent one).';err.classList.remove('hidden');return}
       let notes=fd.get('notes')||'';
       notes=withBondReference(notes,fd.get('reference')||'');
-      const amount=Number(fd.get('amount'));
+      if(pastStay)notes=((notes||'')+`\nPAST_STAY_BOND: recorded against historical stay #${tid} without changing stay dates`).trim();
       await insert('bonds',{
-        tenancy_id:Number(fd.get('tenancy_id')),
+        tenancy_id:tid,
         amount,
         currency:fd.get('original_currency'),
         original_currency:fd.get('original_currency'),
-        received_date:fd.get('received_date')||today(),
+        received_date:paidDate||today(),
         bond_type:fd.get('bond_type'),
         received_via:fd.get('received_via')||null,
         notes:notes||null,
         received:true,
         refunded:false,
         remaining_amount:amount,
-        remaining_description:'Held'
+        remaining_description:pastStay?'Held (recorded for past stay)':'Held'
       });
-      toast('Bond saved');
+      toast(pastStay?'Past-stay bond recorded (stay dates unchanged)':'Bond saved');
     }
     f.reset(); if(f.elements.id)f.elements.id.value=''; if(f.elements.tenancy_id)f.elements.tenancy_id.disabled=false;
     $('#bond-dialog').close(); await loadAll();
@@ -6208,17 +6540,32 @@ $('#bond-action-form').onsubmit=async e=>{
   e.preventDefault();const f=e.currentTarget,fd=new FormData(f),err=$('#bond-action-error');err.classList.add('hidden');
   const id=Number(fd.get('bond_id')),b=state.bonds.find(x=>x.id===id),action=fd.get('action'),amount=Number(fd.get('amount')||0);
   try{
+    const current=bondRemaining(b)??Number(b?.amount||0);
+    // Ordinary refunds only spend remaining balance — never touch retained via this path.
+    if(action==='partial_refund'||action==='full_refund'){
+      if(current<=0){
+        err.textContent='No remaining balance to refund. If this bond was retained, use “Refund from retained” instead.';
+        err.classList.remove('hidden');return;
+      }
+      if(action==='partial_refund'){
+        if(!Number.isFinite(amount)||amount<=0){err.textContent='Enter a positive refund amount.';err.classList.remove('hidden');return}
+        if(amount>current+0.009){err.textContent=`Partial refund cannot exceed remaining (${current}).`;err.classList.remove('hidden');return}
+      }
+    }
     if(action==='forfeit_full'||action==='forfeit_partial'){
       const addForfeit=action==='forfeit_full'?(bondRemaining(b)??Number(b?.amount||0)):amount;
       const splitErr=validateDepositSplit(b?.amount,bondRefundedTotal(b),bondForfeited(b)+addForfeit);
       if(splitErr){err.textContent=splitErr;err.classList.remove('hidden');return}
     }
     await insert('bond_refund_events',{bond_id:id,action,amount:amount||null,currency:b?.original_currency||b?.currency||'AUD',method:fd.get('method')||null,reference:fd.get('reference')||null,notes:fd.get('notes')||null,created_by:getSession()?.user?.id||null});
-    const current=bondRemaining(b)??Number(b?.amount||0);let remaining=current,patchRow={};
+    let remaining=current,patchRow={};
     if(action==='mark_refunded'){patchRow={refunded:true,refunded_date:today(),refund_amount:amount||Number(b?.refund_amount||b?.amount||0),remaining_amount:0,remaining_description:'Marked as refunded',deposit_status:'Refunded'};}
     if(action==='mark_not_refunded'){patchRow={refunded:false,refunded_date:null,remaining_description:'Marked as not refunded'}; if(amount) patchRow.remaining_amount=amount;}
     if(action==='partial_refund'){remaining=Math.max(0,current-amount);patchRow={refund_amount:Number(b?.refund_amount||0)+amount,remaining_amount:remaining,remaining_description:`Remaining after partial refund: ${remaining}`}}
-    if(action==='full_refund'){remaining=0;patchRow={refunded:true,refunded_date:today(),refund_amount:Number(b?.refund_amount||0)+amount,refund_method:fd.get('method')||null,refund_reference:fd.get('reference')||null,remaining_amount:0,remaining_description:'Fully refunded',deposit_status:'Refunded'}}
+    if(action==='full_refund'){
+      const refundAmt=Number.isFinite(amount)&&amount>0?Math.min(amount,current):current;
+      remaining=0;patchRow={refunded:true,refunded_date:today(),refund_amount:Number(b?.refund_amount||0)+refundAmt,refund_method:fd.get('method')||null,refund_reference:fd.get('reference')||null,remaining_amount:0,remaining_description:'Fully refunded',deposit_status:'Refunded'};
+    }
     if(action==='forfeit_full'){
       const amt=current;remaining=0;
       patchRow={forfeited_amount:Number(b?.forfeited_amount||0)+amt,forfeited_at:today(),forfeited_by:getSession()?.user?.id||null,forfeiture_reason:fd.get('notes')||null,deposit_status:'Forfeited / Retained',remaining_amount:0,remaining_description:`Forfeited / retained ${amt}. Refund due $0. Classification: Forfeited Deposit Income`};
@@ -6248,10 +6595,81 @@ $('#bond-action-form').onsubmit=async e=>{
   }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
 };
 let bondRetainBusy=false;
+let bondRefundRetainedBusy=false;
 const bondRetainMode=$('#bond-retain-mode');
 const bondRetainAmount=$('#bond-retain-amount');
 if(bondRetainMode)bondRetainMode.addEventListener('change',()=>refreshBondRetainSummary());
 if(bondRetainAmount)bondRetainAmount.addEventListener('input',()=>refreshBondRetainSummary());
+const bondRefundRetainedAmount=$('#bond-refund-retained-amount');
+if(bondRefundRetainedAmount)bondRefundRetainedAmount.addEventListener('input',()=>refreshBondRefundRetainedSummary());
+$('#bond-refund-retained-form').onsubmit=async e=>{
+  e.preventDefault();
+  if(bondRefundRetainedBusy)return;
+  bondRefundRetainedBusy=true;
+  const f=e.currentTarget,fd=new FormData(f),err=$('#bond-refund-retained-error');err.classList.add('hidden');
+  const saveBtn=$('#bond-refund-retained-save');
+  if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving…'}
+  try{
+    const id=Number(fd.get('bond_id'));
+    if(!fd.get('confirm_refund_retained'))throw new Error('Please confirm this refund-from-retained before saving.');
+    let fresh=null;
+    try{const rows=await select('bonds',`id=eq.${id}&select=*`);fresh=rows?.[0]||null}catch(_){fresh=null}
+    if(!fresh)fresh=state.bonds.find(x=>Number(x.id)===Number(id))||null;
+    if(!fresh)throw new Error('Bond not found.');
+    const plan=planBondRefundRetained(fresh,{
+      amount:fd.get('amount'),
+      reason:fd.get('reason'),
+      method:fd.get('method'),
+      reference:fd.get('reference'),
+      staffId:getSession()?.user?.id||null,
+      refundedAt:today()
+    });
+    if(!plan.ok)throw new Error(plan.error);
+    const s=plan.summary;const cur=s.currency==='CNY'?'CNY':'AUD';
+    const confirmMsg=[
+      'Confirm Refund from retained bond?',
+      '',
+      `Original bond: ${money(s.original,cur)}`,
+      `Currently retained: ${money(s.alreadyRetained,cur)}`,
+      `Already refunded: ${money(s.alreadyRefunded,cur)}`,
+      `Refunding from retained now: ${money(s.refundingNow,cur)}`,
+      `Net retained after: ${money(s.retainedAfter,cur)}`,
+      `Refunded total after: ${money(s.refundedAfter,cur)}`,
+      `Remaining after: ${money(s.remainingAfter,cur)}`,
+      '',
+      `Reason: ${s.reason}`,
+      '',
+      'Administrative record only — does not transfer money. Original Retain events stay in history.'
+    ].join('\n');
+    if(!confirm(confirmMsg))return;
+    const idem=String(fd.get('idempotency_key')||'').trim()||newBondRefundRetainedIdempotencyKey(id);
+    f.elements.idempotency_key.value=idem;
+    const applied=await applyBondRefundRetained(fresh,{
+      amount:s.refundingNow,
+      reason:s.reason,
+      method:s.method,
+      reference:s.reference,
+      staffId:getSession()?.user?.id||null,
+      idempotencyKey:idem
+    },{idempotencyKey:idem,refundedAt:today()});
+    const idx=state.bonds.findIndex(x=>Number(x.id)===Number(id));
+    if(idx>=0){
+      if(applied.bond&&typeof applied.bond==='object')Object.assign(state.bonds[idx],applied.bond);
+      else Object.assign(state.bonds[idx],plan.patch);
+    }
+    f.elements.idempotency_key.value=newBondRefundRetainedIdempotencyKey(id);
+    $('#bond-refund-retained-dialog').close();
+    toast(applied.replayed?'Refund from retained already recorded (idempotent retry)':'Refund from retained recorded');
+    await loadAll();
+  }catch(ex){
+    err.textContent=ex.message||String(ex);
+    err.classList.remove('hidden');
+    try{await loadAll()}catch(_){}
+  }finally{
+    bondRefundRetainedBusy=false;
+    if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Confirm refund'}
+  }
+};
 $('#bond-retain-form').onsubmit=async e=>{
   e.preventDefault();
   if(bondRetainBusy)return;

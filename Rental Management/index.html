@@ -2481,6 +2481,7 @@ function validateDepositSplit(original,refunded,forfeited){
 }
 function bondActionLabel(action){
   const map={
+    received:'Bond received',
     retain_full:'Retain full',retain_partial:'Retain partial',
     refund_retained:'Refund from retained',
     forfeit_full:'Forfeit / retain full',forfeit_partial:'Forfeit / retain partial',
@@ -5115,12 +5116,24 @@ async function loadBondArchivesPanel(){
 }
 async function restoreArchivedBond(token){
   if(!canEdit()||!token)return;
-  if(!confirm('Restore this archived bond as a NEW bond record with its archived action history? Original stay dates are not changed.'))return;
   try{
+    // Pre-check: refuse client-side if stay already has a re-recorded bond (server also enforces).
+    let arch=null;
+    try{
+      const rows=await api('bond_deletion_archives',`restore_token=eq.${encodeURIComponent(token)}&select=original_bond_id,bond_snapshot,restored_at&limit=1`);
+      arch=Array.isArray(rows)?rows[0]:rows;
+    }catch(_){arch=null}
+    if(arch?.restored_at){alert('This archive was already restored.');return}
+    const tid=Number(arch?.bond_snapshot?.tenancy_id||0);
+    if(tid&&bondForTenancy(tid)){
+      alert(`Stay #${tid} already has bond #${bondForTenancy(tid).id}. Restore refused to avoid a duplicate — use the existing bond (or delete it first).`);
+      return;
+    }
+    if(!confirm('Restore this archived bond as a NEW bond record with its archived refund and payment history? Original stay dates are not changed. If any history row cannot be restored safely, the whole restore fails and rolls back.'))return;
     const result=await api('rpc/restore_archived_bond','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify({p_restore_token:token})});
     const row=Array.isArray(result)?result[0]:result;
     if(!row||row.ok===false)throw new Error(row?.error||'Restore failed');
-    toast(`Bond restored as #${row.restored_bond_id} (from archive of #${row.original_bond_id})`);
+    toast(`Bond restored as #${row.restored_bond_id} (refund events ${row.refund_events_restored||'?'} · payment events ${row.payment_events_restored||'?'})`);
     await loadAll();
   }catch(e){alert('Could not restore archived bond: '+e.message)}
 }

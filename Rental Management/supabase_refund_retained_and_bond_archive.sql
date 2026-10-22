@@ -1,34 +1,16 @@
 -- =============================================================================
--- FORWARD MIGRATION — Refund from retained bond + action CHECK fix + soft-delete archive
+-- FORWARD MIGRATION — Refund from retained bond + action CHECK + soft-delete archive
 -- File: Rental Management/supabase_refund_retained_and_bond_archive.sql
 -- =============================================================================
--- Free-plan safe: IF NOT EXISTS / DROP CONSTRAINT IF EXISTS / CREATE OR REPLACE.
--- Does NOT mutate existing bond business amounts on apply.
--- Does NOT transfer money.
+-- Free-plan safe. Does NOT mutate existing bond business amounts on apply.
+-- Does NOT transfer money. Do NOT auto-run against production from agents/CI.
 --
--- Fixes PR #30 risk: expands bond_refund_events.action CHECK so retain_* and
--- refund_retained are allowed (avoids silent history insert failures).
+-- Requires existing helpers used by Bond RLS:
+--   public.is_rental_staff()  /  public.can_edit_rental()
 -- =============================================================================
 
--- 1) Expand / replace action CHECK so retain_* and refund_retained are legal
-do $$
-declare
-  r record;
-begin
-  for r in
-    select c.conname
-    from pg_constraint c
-    join pg_class t on c.conrelid = t.oid
-    join pg_namespace n on t.relnamespace = n.oid
-    where n.nspname = 'public'
-      and t.relname = 'bond_refund_events'
-      and c.contype = 'c'
-      and pg_get_constraintdef(c.oid) ilike '%action%'
-  loop
-    execute format('alter table public.bond_refund_events drop constraint %I', r.conname);
-  end loop;
-end $$;
-
+-- 1) Replace ONLY bond_refund_events_action_check (exact name — no %action% loop)
+--    Keep production-legal actions including received; add refund_retained.
 alter table public.bond_refund_events
   drop constraint if exists bond_refund_events_action_check;
 
@@ -36,21 +18,28 @@ alter table public.bond_refund_events
   add constraint bond_refund_events_action_check
   check (
     action is null or action in (
-      'mark_refunded','mark_not_refunded',
-      'partial_refund','full_refund',
-      'forfeit_full','forfeit_partial',
-      'deduction','note','edit_bond',
-      'retain_full','retain_partial',
-      'refund_retained'
+      'received',
+      'partial_refund',
+      'full_refund',
+      'deduction',
+      'note',
+      'retain_partial',
+      'retain_full',
+      'refund_retained',
+      -- app-used actions already present in Rental PM (keep writable)
+      'mark_refunded',
+      'mark_not_refunded',
+      'forfeit_full',
+      'forfeit_partial',
+      'edit_bond'
     )
   );
 
--- Durable idempotency for refund-from-retained keys
 create unique index if not exists bond_refund_events_refund_retained_idempotency_uidx
   on public.bond_refund_events (reference)
   where reference is not null and reference like 'refund-retained:%';
 
--- Soft-delete archive (recoverable undo on Free plan; no external storage)
+-- Soft-delete archive
 create table if not exists public.bond_deletion_archives (
   id bigserial primary key,
   original_bond_id bigint not null,
@@ -69,22 +58,46 @@ create index if not exists bond_deletion_archives_deleted_at_idx
 
 alter table public.bond_deletion_archives enable row level security;
 
-do $$
-begin
-  if not exists (
-    select 1 from pg_policies
-    where schemaname='public' and tablename='bond_deletion_archives'
-      and policyname='bond_deletion_archives_authorised'
-  ) then
-    create policy bond_deletion_archives_authorised on public.bond_deletion_archives
-      for all to authenticated
-      using (exists (select 1 from public.profiles p where p.id = auth.uid()))
-      with check (exists (select 1 from public.profiles p where p.id = auth.uid()));
-  end if;
-end $$;
+drop policy if exists bond_deletion_archives_authorised on public.bond_deletion_archives;
+drop policy if exists bond_deletion_archives_select_staff on public.bond_deletion_archives;
+drop policy if exists bond_deletion_archives_write_editors on public.bond_deletion_archives;
+
+-- Match Bond-table style: staff can read; editors can write
+create policy bond_deletion_archives_select_staff on public.bond_deletion_archives
+  for select to authenticated
+  using (public.is_rental_staff());
+
+create policy bond_deletion_archives_write_editors on public.bond_deletion_archives
+  for all to authenticated
+  using (public.can_edit_rental())
+  with check (public.can_edit_rental());
 
 grant select, insert, update on public.bond_deletion_archives to authenticated;
 grant usage, select on sequence public.bond_deletion_archives_id_seq to authenticated;
+revoke all on public.bond_deletion_archives from anon;
+revoke all on public.bond_deletion_archives from public;
+
+-- Shared auth gate for bond RPCs (stricter than "any profiles row")
+create or replace function public._bond_rpc_require_editor()
+returns void
+language plpgsql
+stable
+security invoker
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+  if not public.can_edit_rental() then
+    raise exception 'Not authorised (can_edit_rental)';
+  end if;
+end;
+$$;
+
+revoke all on function public._bond_rpc_require_editor() from public;
+revoke all on function public._bond_rpc_require_editor() from anon;
+grant execute on function public._bond_rpc_require_editor() to authenticated;
 
 -- 2) Atomic refund from retained balance
 create or replace function public.refund_retained_bond_atomic(
@@ -115,10 +128,8 @@ declare
   v_status text;
   v_currency text;
 begin
-  if v_uid is null then raise exception 'Not authenticated'; end if;
-  if not exists (select 1 from public.profiles p where p.id = v_uid) then
-    raise exception 'Not authorised';
-  end if;
+  perform public._bond_rpc_require_editor();
+
   if p_idempotency_key is null
      or length(trim(p_idempotency_key)) < 8
      or trim(p_idempotency_key) not like 'refund-retained:%' then
@@ -175,7 +186,6 @@ begin
   if v_new_refunded + v_new_retained + v_deducted > v_original + 0.009 then
     raise exception 'Refunded + retained cannot exceed the original bond';
   end if;
-  -- Post-retention refund keeps remaining at 0 (closed bond)
   v_remaining := greatest(0, v_original - v_new_refunded - v_new_retained - v_deducted);
 
   if v_new_retained > 0 and v_new_refunded > 0 then
@@ -260,7 +270,7 @@ revoke all on function public.refund_retained_bond_atomic(bigint, numeric, text,
 revoke all on function public.refund_retained_bond_atomic(bigint, numeric, text, text, text, text, date) from anon;
 grant execute on function public.refund_retained_bond_atomic(bigint, numeric, text, text, text, text, date) to authenticated;
 
--- 3) Archive bond before hard delete (called from app; single transaction)
+-- 3) Archive + delete (both event tables; no silent skip)
 create or replace function public.archive_and_delete_bond(
   p_bond_id bigint,
   p_confirm_phrase text
@@ -276,32 +286,42 @@ declare
   v_pay_events jsonb;
   v_token text;
   v_arch_id bigint;
+  v_ref_count int;
+  v_pay_count int;
+  v_ref_amt numeric;
+  v_pay_amt numeric;
 begin
-  if v_uid is null then raise exception 'Not authenticated'; end if;
-  if not exists (select 1 from public.profiles p where p.id = v_uid) then
-    raise exception 'Not authorised';
-  end if;
+  perform public._bond_rpc_require_editor();
+
   if trim(coalesce(p_confirm_phrase,'')) <> 'DELETE BOND' then
     raise exception 'Confirmation phrase required: DELETE BOND';
+  end if;
+
+  if to_regclass('public.bond_payment_events') is null then
+    raise exception 'bond_payment_events missing — refuse archive/delete';
   end if;
 
   select * into v_bond from public.bonds where id = p_bond_id for update;
   if not found then raise exception 'Bond not found'; end if;
 
-  select coalesce(jsonb_agg(to_jsonb(e) order by e.id), '[]'::jsonb) into v_events
+  select coalesce(jsonb_agg(to_jsonb(e) order by e.id), '[]'::jsonb),
+         count(*),
+         coalesce(sum(e.amount), 0)
+    into v_events, v_ref_count, v_ref_amt
   from public.bond_refund_events e where e.bond_id = p_bond_id;
 
-  v_pay_events := '[]'::jsonb;
-  begin
-    if to_regclass('public.bond_payment_events') is not null then
-      execute $q$
-        select coalesce(jsonb_agg(to_jsonb(e) order by e.id), '[]'::jsonb)
-        from public.bond_payment_events e where e.bond_id = $1
-      $q$ into v_pay_events using p_bond_id;
-    end if;
-  exception when others then
-    v_pay_events := '[]'::jsonb;
-  end;
+  select coalesce(jsonb_agg(to_jsonb(e) order by e.id), '[]'::jsonb),
+         count(*),
+         coalesce(sum(e.amount), 0)
+    into v_pay_events, v_pay_count, v_pay_amt
+  from public.bond_payment_events e where e.bond_id = p_bond_id;
+
+  if jsonb_array_length(v_events) <> v_ref_count then
+    raise exception 'Refund events archive snapshot count mismatch';
+  end if;
+  if jsonb_array_length(v_pay_events) <> v_pay_count then
+    raise exception 'Payment events archive snapshot count mismatch';
+  end if;
 
   v_token := 'bond-archive:' || p_bond_id::text || ':' || extract(epoch from clock_timestamp())::bigint::text
     || ':' || substr(md5(random()::text || clock_timestamp()::text), 1, 8);
@@ -314,12 +334,7 @@ begin
   ) returning id into v_arch_id;
 
   delete from public.bond_refund_events where bond_id = p_bond_id;
-  begin
-    if to_regclass('public.bond_payment_events') is not null then
-      execute 'delete from public.bond_payment_events where bond_id = $1' using p_bond_id;
-    end if;
-  exception when others then null;
-  end;
+  delete from public.bond_payment_events where bond_id = p_bond_id;
   delete from public.bonds where id = p_bond_id;
 
   return jsonb_build_object(
@@ -327,7 +342,10 @@ begin
     'archive_id', v_arch_id,
     'restore_token', v_token,
     'original_bond_id', p_bond_id,
-    'events_archived', jsonb_array_length(v_events)
+    'refund_events_archived', v_ref_count,
+    'payment_events_archived', v_pay_count,
+    'refund_events_amount_sum', v_ref_amt,
+    'payment_events_amount_sum', v_pay_amt
   );
 end;
 $$;
@@ -336,7 +354,7 @@ revoke all on function public.archive_and_delete_bond(bigint, text) from public;
 revoke all on function public.archive_and_delete_bond(bigint, text) from anon;
 grant execute on function public.archive_and_delete_bond(bigint, text) to authenticated;
 
--- 4) Restore from archive (creates a NEW bond row; does not claim silent undelete)
+-- 4) Restore: both event tables, amount/count verify, refuse if stay already has a bond
 create or replace function public.restore_archived_bond(
   p_restore_token text
 ) returns jsonb
@@ -345,16 +363,25 @@ security invoker
 set search_path = public
 as $$
 declare
-  v_uid uuid := auth.uid();
   v_arch public.bond_deletion_archives%rowtype;
   v_snap jsonb;
   v_new_id bigint;
-  v_ev jsonb;
   v_item jsonb;
+  v_row jsonb;
+  v_tenancy_id bigint;
+  v_ref_expected int;
+  v_pay_expected int;
+  v_ref_amt_expected numeric;
+  v_pay_amt_expected numeric;
+  v_ref_count int;
+  v_pay_count int;
+  v_ref_amt numeric;
+  v_pay_amt numeric;
 begin
-  if v_uid is null then raise exception 'Not authenticated'; end if;
-  if not exists (select 1 from public.profiles p where p.id = v_uid) then
-    raise exception 'Not authorised';
+  perform public._bond_rpc_require_editor();
+
+  if to_regclass('public.bond_payment_events') is null then
+    raise exception 'bond_payment_events missing — refuse restore';
   end if;
 
   select * into v_arch from public.bond_deletion_archives
@@ -365,13 +392,32 @@ begin
   end if;
 
   v_snap := v_arch.bond_snapshot;
+  v_tenancy_id := (v_snap->>'tenancy_id')::bigint;
+  if v_tenancy_id is null then
+    raise exception 'Archive bond snapshot missing tenancy_id';
+  end if;
+
+  -- Prevent second bond when past stay was already re-recorded
+  if exists (select 1 from public.bonds b where b.tenancy_id = v_tenancy_id) then
+    raise exception 'Stay already has a bond — refuse restore to avoid duplicate';
+  end if;
+
+  v_ref_expected := coalesce(jsonb_array_length(v_arch.refund_events_snapshot), 0);
+  v_pay_expected := coalesce(jsonb_array_length(v_arch.payment_events_snapshot), 0);
+  select coalesce(sum((e->>'amount')::numeric), 0) into v_ref_amt_expected
+  from jsonb_array_elements(coalesce(v_arch.refund_events_snapshot, '[]'::jsonb)) e
+  where e ? 'amount' and nullif(e->>'amount','') is not null;
+  select coalesce(sum((e->>'amount')::numeric), 0) into v_pay_amt_expected
+  from jsonb_array_elements(coalesce(v_arch.payment_events_snapshot, '[]'::jsonb)) e
+  where e ? 'amount' and nullif(e->>'amount','') is not null;
+
   insert into public.bonds (
     tenancy_id, amount, currency, original_currency, received_date, bond_type,
     received_via, notes, received, refunded, refund_amount, forfeited_amount,
     deduction_amount, remaining_amount, remaining_description, deposit_status,
     forfeited_at, forfeited_by, forfeiture_reason, refunded_date
   ) values (
-    (v_snap->>'tenancy_id')::bigint,
+    v_tenancy_id,
     coalesce((v_snap->>'amount')::numeric, 0),
     coalesce(v_snap->>'currency', 'AUD'),
     coalesce(v_snap->>'original_currency', v_snap->>'currency', 'AUD'),
@@ -403,7 +449,6 @@ begin
       nullif(v_item->>'amount','')::numeric,
       v_item->>'currency',
       v_item->>'method',
-      -- avoid unique retain:/refund-retained: collisions on restore
       case
         when (v_item->>'reference') like 'retain:%' or (v_item->>'reference') like 'refund-retained:%'
           then (v_item->>'reference') || ':restored:' || v_new_id::text
@@ -415,6 +460,57 @@ begin
     );
   end loop;
 
+  for v_item in select * from jsonb_array_elements(coalesce(v_arch.payment_events_snapshot, '[]'::jsonb))
+  loop
+    -- Full row restore; omit id/identity so defaults assign; force new bond_id
+    v_row := (v_item - 'id');
+    v_row := jsonb_set(v_row, '{bond_id}', to_jsonb(v_new_id), true);
+    begin
+      execute format(
+        'insert into public.bond_payment_events (%s) select %s from jsonb_populate_record(null::public.bond_payment_events, $1) r',
+        (
+          select string_agg(quote_ident(a.attname), ', ' order by a.attnum)
+          from pg_attribute a
+          where a.attrelid = 'public.bond_payment_events'::regclass
+            and a.attnum > 0 and not a.attisdropped
+            and a.attname <> 'id'
+            and coalesce(a.attidentity, '') <> 'a'
+        ),
+        (
+          select string_agg('r.' || quote_ident(a.attname), ', ' order by a.attnum)
+          from pg_attribute a
+          where a.attrelid = 'public.bond_payment_events'::regclass
+            and a.attnum > 0 and not a.attisdropped
+            and a.attname <> 'id'
+            and coalesce(a.attidentity, '') <> 'a'
+        )
+      ) using v_row;
+    exception when others then
+      raise exception 'Cannot safely restore bond_payment_events row: %', sqlerrm;
+    end;
+  end loop;
+
+  select count(*), coalesce(sum(amount), 0)
+    into v_ref_count, v_ref_amt
+  from public.bond_refund_events where bond_id = v_new_id;
+
+  select count(*), coalesce(sum(amount), 0)
+    into v_pay_count, v_pay_amt
+  from public.bond_payment_events where bond_id = v_new_id;
+
+  if v_ref_count <> v_ref_expected then
+    raise exception 'Restore rolled back: refund events count % <> archived %', v_ref_count, v_ref_expected;
+  end if;
+  if v_pay_count <> v_pay_expected then
+    raise exception 'Restore rolled back: payment events count % <> archived %', v_pay_count, v_pay_expected;
+  end if;
+  if abs(v_ref_amt - v_ref_amt_expected) > 0.009 then
+    raise exception 'Restore rolled back: refund events amount sum % <> archived %', v_ref_amt, v_ref_amt_expected;
+  end if;
+  if abs(v_pay_amt - v_pay_amt_expected) > 0.009 then
+    raise exception 'Restore rolled back: payment events amount sum % <> archived %', v_pay_amt, v_pay_amt_expected;
+  end if;
+
   update public.bond_deletion_archives
     set restored_at = now(), restored_bond_id = v_new_id
   where id = v_arch.id;
@@ -423,7 +519,11 @@ begin
     'ok', true,
     'restored_bond_id', v_new_id,
     'original_bond_id', v_arch.original_bond_id,
-    'archive_id', v_arch.id
+    'archive_id', v_arch.id,
+    'refund_events_restored', v_ref_count,
+    'payment_events_restored', v_pay_count,
+    'refund_events_amount_sum', v_ref_amt,
+    'payment_events_amount_sum', v_pay_amt
   );
 end;
 $$;
@@ -433,4 +533,4 @@ revoke all on function public.restore_archived_bond(text) from anon;
 grant execute on function public.restore_archived_bond(text) to authenticated;
 
 comment on function public.refund_retained_bond_atomic(bigint, numeric, text, text, text, text, date) is
-  'Atomic refund from retained (forfeited) balance: decreases forfeited_amount, increases refund_amount; remaining stays 0 when closed.';
+  'Atomic refund from retained balance; requires can_edit_rental(); action refund_retained.';

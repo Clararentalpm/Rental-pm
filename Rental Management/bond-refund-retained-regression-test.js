@@ -287,6 +287,31 @@ assert(refundPart.summary.retainedAfter === 75 && refundPart.summary.refundedAft
 assert(refundPart.summary.remainingAfter === 0, 'lifecycle remaining 0');
 assert(pastStay.check_in === '2024-01-01' && pastStay.check_out === '2024-02-01', 'stay dates unchanged');
 
+// Explicit retain $100 then refund $30 consistency (UI status fields)
+const r100 = {
+  id: 9200,
+  amount: 100,
+  original_currency: 'AUD',
+  refund_amount: 0,
+  forfeited_amount: 0,
+  deduction_amount: 0,
+};
+const keepAll = planBondRetain(r100, { mode: 'full', reason: 'retain all' });
+assert(keepAll.ok && keepAll.summary.retainingNow === 100, 'retain $100 full');
+const kept = { ...r100, ...keepAll.patch };
+assert(bondRemaining(kept) === 0 && bondRetainedTotal(kept) === 100 && bondRefundedTotal(kept) === 0, 'after retain: rem0 ret100 ref0');
+assert(bondBucket(kept) === 'closed', 'after full retain is closed');
+const back30 = planBondRefundRetained(kept, { amount: 30, reason: 'refund thirty' });
+assert(back30.ok, 'refund $30 from retained');
+const afterBack = { ...kept, ...back30.patch };
+assert(bondRetainedTotal(afterBack) === 70, 'net retained 70');
+assert(bondRefundedTotal(afterBack) === 30, 'refunded 30');
+assert(bondRemaining(afterBack) === 0, 'remaining still 0');
+assert(bondBucket(afterBack) === 'closed', 'still closed after refund-from-retained');
+assert(afterBack.deposit_status === 'Partial forfeit / partial refund', 'status Partial forfeit / partial refund');
+assert(bondLedgerIdentity(afterBack).ok, 'identity 100=30+70+0+0');
+assert(bondActionLabel('received') === 'Bond received', 'received action label');
+
 assert(bondActionLabel('refund_retained') === 'Refund from retained', 'action label');
 
 // Deleted-history audit hints: thin activity_log only — never invents events

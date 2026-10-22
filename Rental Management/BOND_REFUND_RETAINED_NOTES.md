@@ -9,12 +9,18 @@
 
 ## Database prerequisite (blocking for RPC paths)
 
-Apply once (SQL Editor or any Postgres client with DDL rights):
+Apply once (SQL Editor or any Postgres client with DDL rights) — **not** by this agent:
 
 1. `supabase_refund_retained_and_bond_archive.sql`
-2. `supabase_refund_retained_and_bond_archive_VERIFY.sql` — expect OK for action_check, rpc_refund_retained, rpc_acl, archive_table, idempotency_index
+2. `supabase_refund_retained_and_bond_archive_VERIFY.sql` — expect OK for:
+   `action_check_received`, `action_check_no_extra_drops`, `rpc_refund_retained`,
+   `rpc_acl_editors`, `archive_rls_staff`, `archive_table`, `idempotency_index`
 
-This migration also expands `bond_refund_events.action` CHECK so `retain_full` / `retain_partial` / `refund_retained` are legal (avoids the PR #30 action mismatch).
+CHECK update drops **only** `bond_refund_events_action_check` by exact name (no `%action%` loop).
+Keeps `received` and other legal actions; adds `refund_retained`.
+RPCs / archive RLS use `can_edit_rental()` / `is_rental_staff()` (not bare profiles membership).
+Archive delete/restore always handles **both** `bond_refund_events` and `bond_payment_events` with count+amount verification; unsafe restore fails and rolls back.
+Restore refuses when the stay already has a bond.
 
 Isolated fictional verification (local throwaway DB):
 

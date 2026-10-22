@@ -4918,6 +4918,55 @@ function openEditPayment(id){
   f.elements.tenancy_id.onchange=null;
   $('#payment-dialog').showModal();
 }
+/**
+ * Read-only: thin delete_bond rows from activity_log (amount/tenancy/type only).
+ * Never treats these as restored bond_refund_events history.
+ */
+function deletedBondAuditHintsForTenancy(tenancyId){
+  const tid=Number(tenancyId);
+  if(!tid)return [];
+  return (state.activity||[]).filter(a=>{
+    if(String(a.action||'')!=='delete_bond')return false;
+    const d=a.details||{};
+    return Number(d.tenancy_id)===tid || Number(a.entity_id)===tid;
+  }).slice().sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
+async function refreshPastStayBondHints(){
+  const f=$('#bond-form');if(!f||f.dataset.pastStay!=='1')return;
+  const warn=$('#bond-edit-warning');if(!warn)return;
+  const tid=Number(f.elements.tenancy_id?.value||0);
+  if(!tid){warn.classList.add('hidden');warn.textContent='';return}
+  const existing=bondForTenancy(tid);
+  if(existing){
+    warn.classList.remove('hidden');
+    warn.innerHTML=`<b>This stay already has bond #${esc(existing.id)}</b>. Edit that record — do not create a duplicate.`;
+    return;
+  }
+  // Prefer in-memory activity; if empty, try a targeted read-only fetch (no writes).
+  let hints=deletedBondAuditHintsForTenancy(tid);
+  if(!hints.length){
+    try{
+      const rows=await select('activity_log',`action=eq.delete_bond&select=id,action,entity_id,details,created_at&order=created_at.desc&limit=20`);
+      const list=Array.isArray(rows)?rows:[];
+      hints=list.filter(a=>{
+        const d=a.details||{};
+        return Number(d.tenancy_id)===tid || Number(a.entity_id)===tid;
+      });
+    }catch(_){/* ignore — hint is best-effort */}
+  }
+  if(!hints.length){
+    warn.classList.remove('hidden');
+    warn.innerHTML=`<b>No recoverable bond archive for this stay.</b> Prior hard-deletes removed live <code>bonds</code> / <code>bond_refund_events</code> rows. Enter the real original amount, currency, paid date, method and reference from your payment receipt. Deleted action history is <b>not</b> recreated.`;
+    return;
+  }
+  const h=hints[0];
+  const d=h.details||{};
+  const amt=d.amount!=null?esc(String(d.amount)):'(not logged)';
+  const typ=d.type?esc(String(d.type)):'(not logged)';
+  const when=h.created_at?esc(new Date(h.created_at).toLocaleString('en-AU')):'—';
+  warn.classList.remove('hidden');
+  warn.innerHTML=`<b>Audit hint only (not restored history).</b> A previous <code>delete_bond</code> log for this stay noted amount <b>${amt}</b>, type <b>${typ}</b>, bond entity <b>#${esc(String(h.entity_id||'—'))}</b> at ${when}. Paid date, method, reference and retain/refund actions were <b>not</b> preserved. Verify against the payment receipt before saving — fields are not auto-filled.`;
+}
 function openBond({pastStay=false}={}){
   const f=$('#bond-form');f.reset();
   if(f.elements.id)f.elements.id.value='';
@@ -4928,7 +4977,7 @@ function openBond({pastStay=false}={}){
   const sub=$('#bond-dialog-sub');
   if(sub){
     sub.textContent=pastStay
-      ?'Select an existing historical stay. Stay dates are not changed. Enter the real original bond details from records — nothing is invented, and deleted action history is not recreated.'
+      ?'Select an existing historical stay. Stay dates are not changed. Enter the real original bond details from your payment receipt — nothing is invented, and deleted action history is not recreated.'
       :'Creates one bond record for the selected stay.';
     sub.classList.remove('hidden');
   }
@@ -4941,8 +4990,16 @@ function openBond({pastStay=false}={}){
     :tenancyOptions();
   f.elements.received_date.value=''; // staff must enter real paid date from records
   if(!pastStay)f.elements.received_date.value=today();
+  if(f.elements.amount)f.elements.amount.value='';
+  if(f.elements.received_via)f.elements.received_via.value='';
   const saveBtn=$('#bond-save-btn');if(saveBtn)saveBtn.textContent=pastStay?'Save past-stay bond':'Save bond';
   $('#bond-error').classList.add('hidden');
+  if(pastStay){
+    f.elements.tenancy_id.onchange=()=>{refreshPastStayBondHints()};
+    refreshPastStayBondHints();
+  }else{
+    f.elements.tenancy_id.onchange=null;
+  }
   $('#bond-dialog').showModal();
 }
 function openBondForPastStay(){openBond({pastStay:true})}

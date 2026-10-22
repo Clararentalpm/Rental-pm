@@ -27,6 +27,19 @@ Isolated fictional verification (local throwaway DB):
 
 No Dashboard → Backups dependency. Archive table lives in the same Postgres project. No money transfer claims.
 
+## Already-deleted bonds (before this migration) — verified
+
+Production probe (anon schema check, 2026-10-22):
+
+| Source | Result |
+|--------|--------|
+| `bond_deletion_archives` | **Not present** (PGRST205) — archive/undo not installed yet |
+| `archive_and_delete_bond` | **Not present** (PGRST202) |
+| Old `deleteBond()` behaviour | Hard-deleted `bond_refund_events` then `bonds` |
+| Thin `activity_log` (`delete_bond`) | May contain only `{amount, tenancy_id, type}` if the best-effort insert succeeded — **not** paid date/method/reference/retain-refund events |
+
+**Conclusion:** An already hard-deleted bond’s action history cannot be claimed restored. Staff must re-record the original bond from the payment receipt on the existing historical stay (past-stay flow). After re-record → Retain → Refund from retained works on the new ledger. Future deletes (after SQL apply) go through archive + restore.
+
 ## Tests
 
 - `node bond-refund-retained-regression-test.js` (40 checks, fictional)

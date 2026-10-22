@@ -107,6 +107,7 @@ const {
   tenancyOptions,
   tenancyKind,
   bondActionLabel,
+  deletedBondAuditHintsForTenancy,
 } = sandbox;
 
 let passed = 0;
@@ -287,6 +288,25 @@ assert(refundPart.summary.remainingAfter === 0, 'lifecycle remaining 0');
 assert(pastStay.check_in === '2024-01-01' && pastStay.check_out === '2024-02-01', 'stay dates unchanged');
 
 assert(bondActionLabel('refund_retained') === 'Refund from retained', 'action label');
+
+// Deleted-history audit hints: thin activity_log only — never invents events
+sandbox.state.activity = [
+  {
+    action: 'delete_bond',
+    entity_id: 888,
+    created_at: '2026-10-01T00:00:00Z',
+    details: { amount: 100, tenancy_id: 7100, type: 'bond' },
+  },
+];
+const hints = deletedBondAuditHintsForTenancy(7100);
+assert(hints.length === 1 && Number(hints[0].details.amount) === 100, 'audit hint finds delete_bond amount');
+assert(deletedBondAuditHintsForTenancy(9999).length === 0, 'audit hint empty for other stay');
+assert(
+  /deleted action history is not recreated|payment receipt/i.test(
+    String(require('fs').readFileSync(path.join(__dirname, 'index.html'), 'utf8'))
+  ),
+  'past-stay copy refuses to invent deleted history'
+);
 
 // Retain then refund simulator chain
 const lifeDb = {

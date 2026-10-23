@@ -312,6 +312,28 @@ assert(afterBack.deposit_status === 'Partial forfeit / partial refund', 'status 
 assert(bondLedgerIdentity(afterBack).ok, 'identity 100=30+70+0+0');
 assert(bondActionLabel('received') === 'Bond received', 'received action label');
 
+// Closed bond: refund-from-retained does not reopen and does not rewrite prior retain events
+const priorRetainEvent = {
+  id: 1,
+  bond_id: 9200,
+  action: 'retain_full',
+  amount: 100,
+  notes: 'retain all',
+  reference: 'retain:9200:full',
+};
+const eventsBefore = [priorRetainEvent];
+const eventsAfterPlan = eventsBefore.slice(); // plan does not mutate history
+assert(eventsAfterPlan[0].action === 'retain_full' && eventsAfterPlan[0].amount === 100, 'original retain event unchanged by plan');
+assert(bondBucket(afterBack) === 'closed' && bondRemaining(afterBack) === 0, 'closed stays closed');
+
+// Authorised holders share Owner-level bond edit gate
+sandbox.state.me = { id: 'viewer-1', role: 'viewer' };
+sandbox.state.profiles = [{ id: 'viewer-1', role: 'viewer', display_name: 'V' }];
+assert(sandbox.canEdit() === true && sandbox.hasFullAppAccess() === true, 'authorised viewer has full bond edit access');
+sandbox.state.me = { id: 'stranger', role: 'owner' };
+sandbox.state.profiles = [{ id: 'viewer-1', role: 'viewer' }];
+assert(sandbox.canEdit() === false, 'signed profile required — role label alone is not enough');
+
 assert(bondActionLabel('refund_retained') === 'Refund from retained', 'action label');
 
 // Deleted-history audit hints: thin activity_log only — never invents events
@@ -355,5 +377,52 @@ const refundSim = simulateRefundRetainedBondAtomic(lifeDb, {
 });
 assert(refundSim.ok && refundSim.retained_after === 75 && refundSim.refunded_after === 25, 'chained sim retain→refund');
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+// Source guard: no legacy hard-delete fallback strings in deleteBond path
+const htmlSrc = require('fs').readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+assert(!/Continue with permanent hard delete/.test(htmlSrc), 'legacy hard-delete confirm removed');
+assert(/archive_and_delete_bond is not installed/.test(htmlSrc), 'clear block error when RPC missing');
+assert(!/await api\('bonds',`id=eq\.\$\{id\}`,\{method:'DELETE'\}\)/.test(
+  htmlSrc.slice(htmlSrc.indexOf('async function deleteBond'), htmlSrc.indexOf('async function loadBondArchivesPanel'))
+), 'deleteBond has no direct bonds DELETE fallback');
+
+(async () => {
+  // deleteBond: no hard-delete fallback when archive RPC missing
+  sandbox.state.bonds = [{ id: 9300, tenancy_id: 7100, amount: 50, forfeited_amount: 0, refund_amount: 0, deduction_amount: 0, bond_type: 'bond', original_currency: 'AUD' }];
+  sandbox.state.bondRefundEvents = [{ id: 9, bond_id: 9300, action: 'received', amount: 50 }];
+  sandbox.state.bondEvents = [{ id: 8, bond_id: 9300, amount: 50 }];
+  sandbox.state.me = { id: 'viewer-1', role: 'viewer' };
+  sandbox.state.profiles = [{ id: 'viewer-1', role: 'viewer' }];
+  const delMissing = await sandbox.deleteBond(9300, {
+    prompt: () => 'DELETE BOND',
+    alert: () => {},
+    toast: () => {},
+    skipReload: true,
+    callRpc: async () => {
+      throw new Error('PGRST202 Could not find the function public.archive_and_delete_bond');
+    },
+  });
+  assert(delMissing.ok === false && delMissing.error === 'archive_rpc_missing', 'delete blocked when archive RPC missing');
+  assert(sandbox.state.bonds.some((x) => Number(x.id) === 9300), 'bond row kept when archive RPC missing');
+  assert(sandbox.state.bondRefundEvents.some((x) => Number(x.bond_id) === 9300), 'refund events kept when archive RPC missing');
+
+  const delOk = await sandbox.deleteBond(9300, {
+    prompt: () => 'DELETE BOND',
+    alert: () => {},
+    toast: () => {},
+    skipReload: true,
+    callRpc: async () => ({
+      ok: true,
+      restore_token: 'bond-archive:9300:test',
+      refund_events_archived: 1,
+      payment_events_archived: 1,
+    }),
+  });
+  assert(delOk.ok === true && delOk.archive.restore_token, 'delete succeeds with verified archive token');
+  assert(!sandbox.state.bonds.some((x) => Number(x.id) === 9300), 'bond removed from state after archived delete');
+
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

@@ -5054,48 +5054,64 @@ async function deletePayment(id){
     insert('activity_log',{user_id:uid,action:'delete_payment',entity_type:'payment',entity_id:String(id),details:{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date}}).catch(()=>{});
   }catch(e){alert(e.message)}
 }
-async function deleteBond(id){
-  if(!canEdit()){alert('Authorised account required to delete bond / deposit history.');return}
+function isArchiveDeleteRpcMissingError(ex){
+  const m=String(ex?.message||ex||'');
+  return /404|PGRST202|could not find.*(function|archive_and_delete_bond)|archive_and_delete_bond.*does not exist/i.test(m);
+}
+/**
+ * Delete bond only via archive_and_delete_bond (verified archive first).
+ * Never hard-deletes when the archive RPC is unavailable.
+ */
+async function deleteBond(id,deps={}){
+  if(!canEdit()){alert('Authorised account required to delete bond / deposit history.');return {ok:false,error:'not_authorised'}}
   const b=state.bonds.find(x=>Number(x.id)===Number(id));
-  if(!b)return;
+  if(!b)return {ok:false,error:'not_found'};
   const refundEv=(state.bondRefundEvents||[]).filter(e=>Number(e.bond_id)===Number(id));
   const payEv=(state.bondEvents||[]).filter(e=>Number(e.bond_id)===Number(id));
   const cur=b.original_currency==='CNY'?'CNY':'AUD';
   const detail=[
     `Bond #${b.id} · ${b.bond_type||'bond'} · original ${money(b.amount,cur)}`,
     `Remaining ${money(bondRemaining(b),cur)} · Retained ${money(bondRetainedTotal(b),cur)} · Refunded ${money(bondRefundedTotal(b),cur)}`,
-    `${refundEv.length} bond action history row(s) and ${payEv.length} bond payment event row(s) will leave the live tables.`,
-    'A recoverable archive snapshot is created first (when archive_and_delete_bond is installed).',
-    'Type DELETE BOND to confirm. This is not a silent undelete of older hard-deletes.'
+    `${refundEv.length} bond action history row(s) and ${payEv.length} bond payment event row(s) will move into a recoverable archive.`,
+    'Deletion requires archive_and_delete_bond. There is no permanent hard-delete fallback.',
+    'Type DELETE BOND to confirm.'
   ].join('\n');
-  const phrase=prompt(`${detail}\n\nType DELETE BOND to confirm deletion:`);
-  if(phrase==null)return;
-  if(String(phrase).trim()!=='DELETE BOND'){alert('Deletion cancelled — confirmation phrase did not match.');return}
+  const ask=deps.prompt||((msg)=>prompt(msg));
+  const phrase=ask(`${detail}\n\nType DELETE BOND to confirm deletion:`);
+  if(phrase==null)return {ok:false,error:'cancelled'};
+  if(String(phrase).trim()!=='DELETE BOND'){
+    alert('Deletion cancelled — confirmation phrase did not match.');
+    return {ok:false,error:'confirm_mismatch'};
+  }
+  const callRpc=deps.callRpc||(body=>api('rpc/archive_and_delete_bond','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)}));
+  const alertFn=deps.alert||((msg)=>alert(msg));
+  const toastFn=deps.toast||((msg)=>toast(msg));
   try{
-    const callRpc=body=>api('rpc/archive_and_delete_bond','',{method:'POST',headers:{'Content-Type':'application/json',Prefer:'return=representation'},body:JSON.stringify(body)});
+    let row;
     try{
       const result=await callRpc({p_bond_id:Number(id),p_confirm_phrase:'DELETE BOND'});
-      const row=Array.isArray(result)?result[0]:result;
-      if(!row||row.ok===false)throw new Error(row?.error||'Archive delete failed');
-      toast(`Bond archived (token ${row.restore_token}). Restore from Recently deleted bonds if needed.`);
+      row=Array.isArray(result)?result[0]:result;
     }catch(rpcEx){
-      const m=String(rpcEx?.message||rpcEx||'');
-      if(!/404|PGRST202|archive_and_delete_bond|does not exist/i.test(m))throw rpcEx;
-      // Fallback when migration not yet applied: hard delete with explicit warning
-      if(!confirm('Archive RPC is not installed yet. Continue with permanent hard delete (no undo)?'))return;
-      await api('bond_refund_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
-      await api('bond_payment_events',`bond_id=eq.${id}`,{method:'DELETE'}).catch(()=>{});
-      await api('bonds',`id=eq.${id}`,{method:'DELETE'});
-      toast('Bond permanently deleted (no archive — apply migration for undo)');
+      if(isArchiveDeleteRpcMissingError(rpcEx)){
+        const msg='Bond deletion blocked: archive_and_delete_bond is not installed. Apply supabase_refund_retained_and_bond_archive.sql (then VERIFY) before deleting. The bond was not deleted.';
+        alertFn(msg);
+        return {ok:false,error:'archive_rpc_missing',message:msg};
+      }
+      throw rpcEx;
     }
+    if(!row||row.ok===false)throw new Error(row?.error||'Archive delete failed');
+    if(!row.restore_token)throw new Error('Archive delete did not return a restore token — bond not confirmed archived.');
+    toastFn(`Bond archived (token ${row.restore_token}). Restore from Recently deleted bonds if needed.`);
     state.bondRefundEvents=state.bondRefundEvents.filter(x=>Number(x.bond_id)!==Number(id));
     state.bondEvents=state.bondEvents.filter(x=>Number(x.bond_id)!==Number(id));
     state.bonds=state.bonds.filter(x=>Number(x.id)!==Number(id));
-    await loadAll();
+    if(!deps.skipReload)await loadAll();
     const uid=getSession()?.user?.id||null;
-    insert('activity_log',{user_id:uid,action:'delete_bond',entity_type:'bond',entity_id:Number(id),details:{amount:b.amount,tenancy_id:b.tenancy_id,type:b.bond_type}}).catch(()=>{});
+    insert('activity_log',{user_id:uid,action:'delete_bond',entity_type:'bond',entity_id:Number(id),details:{amount:b.amount,tenancy_id:b.tenancy_id,type:b.bond_type,restore_token:row.restore_token||null}}).catch(()=>{});
+    return {ok:true,archive:row};
   }catch(e){
-    alert('Could not delete this bond / deposit history: '+e.message);
+    alertFn('Could not delete this bond / deposit history: '+e.message);
+    return {ok:false,error:e.message||String(e)};
   }
 }
 async function loadBondArchivesPanel(){

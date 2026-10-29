@@ -578,11 +578,55 @@ async function raw(path,opts={},auth=true){
   }catch(e){if(e.name==='AbortError')throw new Error('Request timed out. Please wait and retry once.');throw e}finally{t.done()}
 }
 async function signIn(email,password){const data=await raw('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})},false);saveSession(data);return data}
-async function refreshSession(){const s=getSession();if(!s?.refresh_token)throw new Error('Session expired.');const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);saveSession(data);return data}
+/** Single-flight refresh so parallel loadAll requests do not race and fail one table as "missing". */
+let __refreshSessionPromise=null;
+async function refreshSession(){
+  if(__refreshSessionPromise)return __refreshSessionPromise;
+  __refreshSessionPromise=(async()=>{
+    const s=getSession();
+    if(!s?.refresh_token)throw new Error('Session expired.');
+    const data=await raw('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:s.refresh_token})},false);
+    saveSession(data);
+    return data;
+  })().finally(()=>{__refreshSessionPromise=null});
+  return __refreshSessionPromise;
+}
 async function api(table,query='',opts={}){let s=getSession();if(!s?.access_token)throw new Error('Not signed in.');if(s.expires_at&&Date.now()/1000>Number(s.expires_at)-60)await refreshSession();return raw(`/rest/v1/${table}${query?'?'+query:''}`,opts,true)}
 const select=(t,q='')=>api(t,q,{method:'GET',headers:{Accept:'application/json'}});
 const insert=(t,row)=>api(t,'',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
 const patch=(t,filter,row)=>api(t,filter,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify(row)});
+/** True only when PostgREST/Postgres says the relation itself is absent — not RLS/auth/network. */
+function isMissingRelationError(err){
+  const m=String(err?.message||err||'');
+  return /PGRST205|PGRST204|42P01|does not exist|Could not find the table|relation .* does not exist|schema cache/i.test(m)
+    && /payment_actions|payment_action_history|booking_financial_events|room_viewings/i.test(m);
+}
+function paymentActionsMissingMessage(){
+  return 'Payment actions table not ready. Run Rental Management/supabase_payment_actions_cancel.sql (or supabase_payment_actions_repair.sql) in Supabase SQL Editor, then Refresh.';
+}
+/**
+ * Classify payment_actions load failure. Do not treat JWT/RLS/timeout as "run migration".
+ * Returns {kind:'missing'|'auth'|'network'|'other', message}
+ */
+function classifyPaymentActionsLoadError(err){
+  const m=String(err?.message||err||'');
+  // Already-classified missing banner / explicit relation-missing signals
+  if(/Payment actions table not ready/i.test(m)
+    || isMissingRelationError(err)
+    || (/PGRST205|42P01|Could not find the table/i.test(m)&&/payment_action/i.test(m))){
+    return {kind:'missing',message:paymentActionsMissingMessage()};
+  }
+  if(/not signed in|session expired|JWT|401|PGRST301|Invalid Refresh/i.test(m)){
+    return {kind:'auth',message:'Could not load payment actions (session). Sign out/in and Refresh. The table may already exist — this is not a missing-migration error.'};
+  }
+  if(/timed out|network\/timeout|Failed to fetch|NetworkError|Load failed|502|503|504/i.test(m)){
+    return {kind:'network',message:'Could not load payment actions (network/timeout). Retry Refresh. The table may already exist — this is not a missing-migration error.'};
+  }
+  if(/42501|permission denied|row-level security|RLS|access was denied \(RLS/i.test(m)){
+    return {kind:'rls',message:'Payment actions exist but access was denied (RLS/grants). Apply supabase_authorised_full_access.sql / supabase_payment_actions_repair.sql so authorised profiles can read/write. Do not re-create the table.'};
+  }
+  return {kind:'other',message:m||'Could not load payment actions.'};
+}
 
 function showAuth(msg='',err=''){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#app').classList.add('hidden');$('#fatal').classList.add('hidden');$('#auth').classList.remove('hidden');$('#auth-msg').textContent=msg;$('#auth-msg').classList.toggle('hidden',!msg);$('#auth-err').textContent=err;$('#auth-err').classList.toggle('hidden',!err)}
 function showApp(){clearTimeout(window.__bootTimer);$('#boot').classList.add('hidden');$('#auth').classList.add('hidden');$('#fatal').classList.add('hidden');$('#app').classList.remove('hidden')}
@@ -3135,10 +3179,27 @@ async function logBookingEvent(row){
   try{await insert('booking_financial_events',{...row,created_by:getSession()?.user?.id||null})}catch(_){}
   try{await insert('activity_log',{user_id:getSession()?.user?.id||null,action:row.event_type,entity_type:'tenancy',entity_id:String(row.tenancy_id||''),details:row})}catch(_){}
 }
+async function ensurePaymentActionsReachable(){
+  if(!state.paymentActionsError)return true;
+  const classified=classifyPaymentActionsLoadError(state.paymentActionsError);
+  if(classified.kind==='missing')throw new Error(paymentActionsMissingMessage());
+  // Table likely exists — prior load failed for auth/network/RLS. Re-probe once before blocking.
+  try{
+    const rows=await select('payment_actions','select=id&limit=1');
+    state.paymentActions=Array.isArray(state.paymentActions)?state.paymentActions:[];
+    if(Array.isArray(rows)&&!state.paymentActions.length){/* keep empty until full reload */}
+    state.paymentActionsError='';
+    return true;
+  }catch(e){
+    const again=classifyPaymentActionsLoadError(e);
+    state.paymentActionsError=again.message;
+    throw new Error(again.message);
+  }
+}
 async function ensurePersistedAction(a){
   if(!a)return null;
   if(!a.virtual&&a.id&&!String(a.id).startsWith('virtual'))return a;
-  if(state.paymentActionsError)throw new Error('Payment actions table not ready. Run supabase_payment_actions_cancel.sql first.');
+  await ensurePaymentActionsReachable();
   const t=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));
   const row={
     property_id:a.property_id||roomBy(t?.room_id)?.property_id||state.propertyId,
@@ -3158,8 +3219,15 @@ async function ensurePersistedAction(a){
     last_modified_by:getSession()?.user?.id||null,
     last_modified_at:new Date().toISOString()
   };
-  const created=await insert('payment_actions',row);
-  return created?.[0]||row;
+  try{
+    const created=await insert('payment_actions',row);
+    return created?.[0]||row;
+  }catch(e){
+    const c=classifyPaymentActionsLoadError(e);
+    if(c.kind==='missing')throw new Error(paymentActionsMissingMessage());
+    if(c.kind==='rls')throw new Error(c.message);
+    throw e;
+  }
 }
 async function supersedeActionsForTenancy(tenancyId,reason,replacementDue){
   const open=(state.paymentActions||[]).filter(a=>Number(a.tenancy_id)===Number(tenancyId)&&['open','due_soon','overdue'].includes(String(a.status||'').toLowerCase()));
@@ -3284,7 +3352,11 @@ async function loadAll(){
       }
       if(keys[i]==='paymentActions'||keys[i]==='paymentActionHistory'||keys[i]==='bookingEvents'){
         state[keys[i]]=[];
-        if(keys[i]==='paymentActions')state.paymentActionsError=r.reason.message||'payment_actions table missing';
+        if(keys[i]==='paymentActions'){
+          const c=classifyPaymentActionsLoadError(r.reason);
+          // Store classified message — only "missing" should push users to re-run create-table SQL.
+          state.paymentActionsError=c.message;
+        }
       }
     }
   });
@@ -4032,7 +4104,7 @@ function paymentsPage(){
   const roomOpts=currentPropertyRooms().map(r=>`<option value="${r.id}" ${Number(payRoom)===Number(r.id)?'selected':''}>${esc(roomShortName(r))}</option>`).join('');
   const filter=state.actionFilter||'open';
   const actionRows=displayPaymentActions(filter);
-  const setup=state.paymentActionsError?`<div class="note" style="margin-bottom:12px"><b>Persisted action history optional.</b> Derived reminders still work. To enable Edit / History / Supersede storage, owner can run <code>Rental Management/supabase_payment_actions_cancel.sql</code> (manual approval — not auto-run).</div>`:'';
+  const setup=state.paymentActionsError?`<div class="note" style="margin-bottom:12px"><b>Payment Actions load issue.</b> ${esc(state.paymentActionsError)}<div class="small" style="margin-top:8px">If the table already exists, do <b>not</b> recreate it — Refresh, or apply <code>supabase_payment_actions_repair.sql</code> only for grants/RLS. Derived reminders may still show.</div></div>`:'';
   const statusCell=t=>{
     const rs=rentState(t);
     if(rs==='cancelled')return `<span class="action-status-cancelled">Cancelled / Not Payable</span>`;

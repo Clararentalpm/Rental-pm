@@ -41,7 +41,7 @@ assert('form persists rent_payments before activity log',(()=>{
   return logPos>0&&((insertPos>=0&&insertPos<logPos)||(patchPos>=0&&patchPos<logPos));
 })());
 assert('form returns early on payment write failure',/catch\(ex\)\{[\s\S]*?err\.textContent=ex\.message[\s\S]*?return;\s*\}/.test(formBlock));
-assert('form still toasts success after secondary issues',/toast\(secondary\?/.test(formBlock)||/Note: \$\{secondary\}/.test(formBlock));
+assert('form still toasts success after secondary issues',/toast\(notes\.length\?/.test(formBlock)||/toast\(secondary\?/.test(formBlock)||/Note: \$\{/.test(formBlock));
 assert('duplicate prevented toast present',/Payment already recorded \(duplicate prevented\)/.test(formBlock));
 assert('idempotency key written into notes',/IDEMPOTENCY_KEY:\$\{idem\}/.test(formBlock));
 

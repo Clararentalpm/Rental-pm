@@ -224,7 +224,7 @@ dialog{border:0;border-radius:18px;padding:0;width:min(780px,calc(100vw - 30px))
 </dialog>
 
 <dialog id="payment-dialog"><form id="payment-form" class="dialog-body">
-  <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Period end drives Rent due status — leave it blank and we fill the next unpaid cycle. WeChat defaults to RMB (CNY); Cash / EFT default to AUD.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
+  <div class="dialog-head"><div><h2 id="payment-dialog-title">Record rent payment</h2><div class="muted small">Covered Period is optional — you can save now and add start/end later via Edit Payment. When set, period end helps Rent due status. WeChat defaults to RMB (CNY); Cash / EFT default to AUD.</div></div><button type="button" class="close" data-close="payment-dialog">×</button></div>
   <input type="hidden" name="id" value="">
   <input type="hidden" name="payment_action_id" value="">
   <input type="hidden" name="idempotency_key" value="">
@@ -562,7 +562,9 @@ const fmtDate=v=>{
   return new Intl.DateTimeFormat('en-AU',{day:'2-digit',month:'short',year:'numeric'}).format(d);
 };
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('hidden');setTimeout(()=>t.classList.add('hidden'),2600)};
-let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'open',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property',paymentSearch:'',paymentFilterTenant:'',paymentFilterRoom:'',paymentFilterMethod:'',paymentFilterStatus:'all',paymentFilterFrom:'',paymentFilterTo:''};
+let state={page:'overview',propertyId:null,view:'current',properties:[],rooms:[],tenants:[],tenancies:[],bonds:[],payments:[],profiles:[],roomProfiles:[],priceHistory:[],activity:[],bondEvents:[],bondRefundEvents:[],viewings:[],viewingsError:'',paymentActions:[],paymentActionHistory:[],bookingEvents:[],paymentActionsError:'',availabilityMode:'calendar',incomeMode:'weekly',tenantSearch:'',tenantFilter:'current',viewingFilter:'upcoming',actionFilter:'open',bondFilter:'current',me:null,scheduleSearch:'',scheduleStatus:'all',scheduleType:'all',scheduleDueFrom:'',scheduleDueTo:'',incomeCompare:'property',paymentSearch:'',paymentFilterTenant:'',paymentFilterRoom:'',paymentFilterMethod:'',paymentFilterStatus:'all',paymentFilterFrom:'',paymentFilterTo:''};
+/** In-flight payment deletes — prevents double-submit / double DELETE. */
+const deletingPaymentIds=new Set();
 
 function getSession(){try{return JSON.parse(localStorage.getItem(STORE)||'null')}catch{return null}}
 function saveSession(s){localStorage.setItem(STORE,JSON.stringify(s))}
@@ -3415,7 +3417,7 @@ function renderChrome(){
     state.tenantSearch='';
     state.tenantFilter='current';
     state.view='current';
-    state.bondFilter='open';
+    state.bondFilter='current';
     state.scheduleSearch='';
     state.scheduleStatus='all';
     state.scheduleType='all';
@@ -3639,16 +3641,29 @@ function overviewPage(){
     }).filter(Boolean).join('<br>'):'';
     const occupantLabel=cur.length
       ?cur.map(t=>esc(tenantBy(t.tenant_id)?.name||'Tenant')).join(' + ')
-      :'<span class="muted">AVAILABLE / VACANT</span>';
-    const nextLine=next
-      ?`<div class="nextline"><b>Next:</b> ${esc(paymentGroupName(next))} · ${fmtDate(next.check_in)}${next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:''}<div class="muted small">Upcoming booking</div></div>`
+      :'<span class="muted">Vacant</span>';
+    const checkInLine=cur.length
+      ?cur.map(t=>`Check-in: ${fmtDate(t.check_in)}${t.check_in_time?` ${esc(normalizeClock(t.check_in_time).slice(0,5))}`:''}`).join('<br>')
       :'';
+    const expectedOut=cur.length
+      ?cur.map(t=>{
+        const end=effectiveOccupancyEnd(t);
+        return end?`Expected checkout: ${fmtDate(end)}${t.check_out_time?` ${esc(normalizeClock(t.check_out_time).slice(0,5))}`:''}`:'Expected checkout: Ongoing';
+      }).join('<br>')
+      :'';
+    const availStatus=cur.length?'Occupied':(next?'Vacant — upcoming booking':'Vacant');
+    const nextLine=next
+      ?`<div class="nextline"><b>Next upcoming:</b> ${esc(paymentGroupName(next))}<div class="muted small">Next check-in: ${fmtDate(next.check_in)}${next.check_in_time?` ${esc(normalizeClock(next.check_in_time).slice(0,5))}`:''}</div></div>`
+      :`<div class="nextline muted small"><b>Next upcoming:</b> —</div>`;
     return `<article class="room-card" data-room-status="${r.id}"><div class="room-head"><h3>${esc(roomShortName(r))}</h3>${isSofaRoom(r)?'<span class="badge current">Extra room</span>':(roomIsEnsuite(r)?'<span class="badge ensuite">Ensuite</span>':'')}</div>
-      <div class="muted small">${cur.length?'Current occupant':'Status'}</div>
+      <div class="muted small">Current tenant</div>
       <div class="occupant">${occupantLabel}</div>
+      ${checkInLine?`<div class="subline muted small">${checkInLine}</div>`:''}
+      ${expectedOut?`<div class="subline muted small">${expectedOut}</div>`:''}
       <div class="subline">${rentLine}</div>
-      ${checkoutLine?`<div class="subline muted small">${checkoutLine}</div>`:''}
+      ${checkoutLine&&!expectedOut?`<div class="subline muted small">${checkoutLine}</div>`:''}
       ${nextLine}
+      <div class="nextline"><b>Availability:</b> ${esc(availStatus)}</div>
       <div class="nextline"><b>Asking:</b> ${money(rp.current_asking_price)} &nbsp; <b>Standard:</b> ${money(rp.standard_price)}</div>
       ${canEdit()?`<div class="room-actions"><button class="btn ghost edit-room" data-room="${r.id}">Edit room</button></div>`:''}
     </article>`;
@@ -3674,7 +3689,7 @@ function overviewPage(){
     <div class="alert-card"><span class="muted small">Payment overdue</span><strong>${overdue.length}</strong><div class="small">${overdue.slice(0,3).map(a=>{const ten=state.tenancies.find(x=>Number(x.id)===Number(a.tenancy_id));return `${esc(ten?paymentGroupName(ten):(tenantBy(a.tenant_id)?.name||'Action'))} · ${esc(paymentActionLiveStatus(a))}`}).join('<br>')||'None — cancelled/waived/superseded excluded'}</div></div>
     <div class="alert-card"><span class="muted small">Bond refund watch</span><strong>${bondsToRefund.length}</strong><div class="small">${bondsToRefund.slice(0,3).map(b=>{const ten=state.tenancies.find(x=>x.id===b.tenancy_id);return `${esc(tenantBy(ten?.tenant_id)?.name||'')} · ${money(bondRemaining(b),b.original_currency==='CNY'?'CNY':'AUD')}`}).join('<br>')||'None — open bonds only'}</div></div>
   </div>
-  <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Current occupant only · ${esc(property()?.name||'property')} · auto-refreshes after edits</span></div><div class="room-grid">${cards}</div></section>
+  <section class="panel"><div class="panel-head"><h2>Room status</h2><span class="muted small">Operational occupancy only (Australia/Brisbane) · Vacant when no current stay · cancelled/past never shown as current · ${esc(property()?.name||'property')}</span></div><div class="room-grid">${cards}</div></section>
   <section class="panel"><div class="panel-head"><h2>Current & upcoming stays</h2><div class="seg">${['current','upcoming','historical'].map(v=>`<button class="${state.view===v?'active':''}" data-view="${v}">${v==='historical'?'Historical / Archive':v[0].toUpperCase()+v.slice(1)}</button>`).join('')}</div></div>${tenancyTable(viewRows,true)}</section>`;
 }
 
@@ -3690,31 +3705,33 @@ function tenancyTable(rows,showActions=false){
   </tbody></table></div>`;
 }
 function tenantsPage(){
-  // Normalize legacy filter values: past→historical, all→current (no mixed list).
+  // Filters: All | Current | Upcoming | Past. Default Current. Kind uses bookingOperationalKind.
   let filter=state.tenantFilter||'current';
-  if(filter==='past')filter='historical';
-  if(filter==='all')filter='current';
-  // Operational default: Current (not Historical). Archive is a separate tab.
-  if(!['current','upcoming','historical'].includes(filter))filter='current';
+  if(filter==='historical')filter='past';
+  if(!['all','current','upcoming','past'].includes(filter))filter='current';
   state.tenantFilter=filter;
   const propName=property()?.name||'this property';
   const allRows=state.tenants.map(t=>tenantProfileRow(t)).filter(x=>x.onProperty&&x.stay);
   const counts={
+    all:allRows.length,
     current:allRows.filter(x=>x.kind==='current').length,
     upcoming:allRows.filter(x=>x.kind==='upcoming').length,
-    historical:allRows.filter(x=>x.kind==='historical').length
+    past:allRows.filter(x=>x.kind==='historical').length
   };
-  // Main operational list = Current + Upcoming only when browsing those tabs.
-  // Historical/Archive is never mixed into Current or Upcoming.
+  // Returning tenants with a future stay classify as Upcoming (via bookingOperationalKind), not Past.
   const rows=allRows
-    .filter(x=>x.kind===filter)
+    .filter(x=>{
+      if(filter==='all')return true;
+      if(filter==='past')return x.kind==='historical';
+      return x.kind===filter;
+    })
     .sort((a,b)=>(a.tenant.name||'').localeCompare(b.tenant.name||''));
   const tabLabel=k=>{
-    const title=k==='current'?'Current':k==='upcoming'?'Upcoming':'Historical / Archive';
+    const title=k==='all'?'All':k==='current'?'Current':k==='upcoming'?'Upcoming':'Past';
     return `${title} (${counts[k]})`;
   };
-  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — operational tabs are <b>Current</b> and <b>Upcoming</b>. Historical / Archive is separate for audit (records are kept, never auto-deleted).</span></div></div>
-  <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, contact, room, stay type or notes on this property…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['current','upcoming','historical'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
+  return `<section class="panel"><div class="panel-head"><div><h2>Tenant profiles</h2><span class="muted small"><b>${esc(propName)}</b> only — filter by stay status. Past keeps historical profiles (never auto-deleted). Returning tenants with a future stay appear under Upcoming.</span></div></div>
+  <div class="tenant-tools"><input id="tenant-search" class="search-input" placeholder="Search tenant, contact, room, stay type or notes on this property…" value="${esc(state.tenantSearch||'')}"><div class="view-switch">${['all','current','upcoming','past'].map(x=>`<button class="${filter===x?'active':''}" data-tfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
   <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Current / Latest Room</th><th>Stay Type</th><th>Rent</th><th>Status</th><th>Actions</th></tr></thead><tbody>
   ${rows.map(({tenant,stay,p,r,kind,journey,segments,currentSeg})=>{
     const b=stay?bondForTenancy(stay.id):null;
@@ -4213,7 +4230,7 @@ function paymentsPage(){
     <label>Search<input id="payment-search" placeholder="Tenant, reference, notes" value="${esc(state.paymentSearch||'')}"></label>
     <button type="button" class="btn ghost" id="payment-filters-reset">Clear filters / Reset</button>
   </div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotesOrDash(p);return `<tr><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-payment" data-payment="${p.id}">Edit</button><button class="btn ghost delete-payment" data-payment="${p.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments match these filters.</div>'}</section>`;
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Received</th><th>Tenant</th><th>Room</th><th>Amount</th><th>Covered period</th><th>Method</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead><tbody>${rows.map(p=>{const t=state.tenancies.find(x=>x.id===p.tenancy_id);const cur=paymentCurrency(p);const note=displayPaymentNotesOrDash(p);const periodLbl=(p.period_start||p.period_end)?`${fmtDate(p.period_start)} → ${fmtDate(p.period_end)}`:'<span class="muted">Not set</span>';return `<tr data-payment-row="${p.id}"><td>${fmtDate(p.received_date)}</td><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td><b>${money(p.amount,cur)}</b><div class="muted small">${esc(cur==='CNY'?'RMB / CNY':'AUD')}</div></td><td>${periodLbl}</td><td>${esc(normalizePaymentMethod(p.payment_method))}</td><td>${badge(p.status||'recorded')}</td><td>${esc(note||'')}</td><td>${canEdit()?`<div class="tenant-actions" role="group" aria-label="Payment actions"><button type="button" class="btn ghost edit-payment" data-payment="${p.id}">Edit Payment</button><button type="button" class="btn ghost delete-payment" data-payment="${p.id}">Delete Payment</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">No payments match these filters.</div>'}</section>`;
 }
 function incomeGroups(payments,mode){
  const g={};payments.filter(p=>p.status!=='unpaid'&&p.received_date).forEach(p=>{const d=new Date(p.received_date+'T12:00:00');let k,l;if(mode==='yearly'){k=String(d.getFullYear());l=k}else if(mode==='monthly'){k=p.received_date.slice(0,7);l=d.toLocaleString('en-AU',{month:'long',year:'numeric'})}else{const x=new Date(d),dw=(x.getDay()+6)%7;x.setDate(x.getDate()-dw);const y=new Date(x);y.setDate(x.getDate()+6);k=x.toISOString().slice(0,10);l=`${fmtDate(k)} → ${fmtDate(y.toISOString().slice(0,10))}`}(g[k]??={label:l,total:0}).total+=Number(p.amount||0)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0])).map(([key,v])=>({key,...v}))
@@ -4260,21 +4277,66 @@ function incomePage(){
     </section>
   </div>`;
 }
+/**
+ * Bond list filter kind from linked stay (same SoT as Tenants).
+ * Missing / invalid tenancy_id → 'unlinked' (Needs Review) — never silently treated as Past.
+ */
+function bondStayFilterKind(b){
+  const tid=b?.tenancy_id;
+  if(tid==null||tid===''||!Number.isFinite(Number(tid)))return 'unlinked';
+  const t=state.tenancies.find(x=>Number(x.id)===Number(tid));
+  if(!t)return 'unlinked';
+  const k=bookingOperationalKind(t);
+  return k==='historical'?'past':k;
+}
+function bondStayFilterLabel(kind){
+  if(kind==='unlinked')return 'Unlinked / Needs Review';
+  if(kind==='past')return 'Past';
+  if(kind==='upcoming')return 'Upcoming';
+  if(kind==='current')return 'Current';
+  return String(kind||'—');
+}
+/** After a successful rent_payments write/delete: refresh derived balances without touching unrelated rows. */
+async function refreshPaymentDerivedState(){
+  let reconcileOk=true,reconcileError='',loadOk=true,loadError='';
+  try{await softReconcileOpenActions()}catch(e){reconcileOk=false;reconcileError=String(e?.message||e||'recalculate failed')}
+  try{await loadAll()}catch(e){loadOk=false;loadError=String(e?.message||e||'reload failed')}
+  return {reconcileOk,reconcileError,loadOk,loadError};
+}
 function bondsPage(){
-  let filter=state.bondFilter||'open';
-  if(filter==='current')filter='open';
-  if(filter==='past')filter='closed';
+  let filter=state.bondFilter||'current';
+  // Legacy open/closed → stay filters (closed bonds remain under Past / All; unlinked stay separate).
+  if(filter==='open')filter='current';
+  if(filter==='closed')filter='past';
+  if(filter==='orphan'||filter==='needs_review')filter='unlinked';
+  if(!['all','current','upcoming','past','unlinked'].includes(filter))filter='current';
   state.bondFilter=filter;
   const all=scopedBonds().sort((a,b)=>b.id-a.id);
-  const openRows=all.filter(b=>bondBucket(b)==='open');
-  const closedRows=all.filter(b=>bondBucket(b)==='closed');
-  const rows=filter==='closed'?closedRows:openRows;
+  const withKind=all.map(b=>({b,kind:bondStayFilterKind(b)}));
+  const counts={
+    all:withKind.length,
+    current:withKind.filter(x=>x.kind==='current').length,
+    upcoming:withKind.filter(x=>x.kind==='upcoming').length,
+    past:withKind.filter(x=>x.kind==='past').length,
+    unlinked:withKind.filter(x=>x.kind==='unlinked').length
+  };
+  const rows=withKind
+    .filter(x=>filter==='all'||x.kind===filter)
+    .map(x=>x.b);
   const historyRows=all;
   const totals=openBondTotalsByCurrency();
   const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
-  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small"><b>Open</b> = remaining held &gt; 0 (money still held). <b>Refunded / Closed</b> = fully refunded, deducted, or forfeited — kept for audit. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?`<div class="tenant-actions"><button id="add-bond" class="btn primary">+ Add bond / deposit</button><button id="add-bond-past" class="btn ghost">+ Record bond for past stay</button></div>`:''}</div>
-  <div class="tenant-tools"><div class="view-switch"><button class="${filter==='open'?'active':''}" data-bfilter="open">Open (${openRows.length})</button><button class="${filter==='closed'?'active':''}" data-bfilter="closed">Refunded / Closed (${closedRows.length})</button></div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);const retainedNow=bondRetainedTotal(b);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}</td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${retainedNow>0?`<div class="muted small">Retained ${money(retainedNow,cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled title="No remaining balance — use Refund from retained if applicable"':''}>Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-refund-retained" data-bond="${b.id}" ${retainedNow<=0?'disabled':''}>Refund from retained</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn danger delete-bond" data-bond="${b.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No ${filter==='open'?'open':'refunded / closed'} bond records.</div>`}</section>
+  const tabKeys=['all','current','upcoming','past','unlinked'];
+  const tabLabel=k=>{
+    const title=k==='all'?'All':k==='current'?'Current':k==='upcoming'?'Upcoming':k==='past'?'Past':'Unlinked / Needs Review';
+    return `${title} (${counts[k]})`;
+  };
+  const unlinkedNote=counts.unlinked
+    ?`<div class="note" style="margin:10px 0 0"> <b>${counts.unlinked}</b> bond(s) have no matching stay — use <b>Unlinked / Needs Review</b>. Records are preserved; nothing is auto-relinked or deleted.</div>`
+    :'';
+  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Filtered by <b>linked stay</b> status (same as Tenants). <b>Unlinked / Needs Review</b> = missing or invalid tenancy (not Past). Past includes ended stays — closed/refunded/retained bonds stay visible. Open held: ${esc(totalLbl)}. Currencies never mixed.</div>${unlinkedNote}</div>${canEdit()?`<div class="tenant-actions"><button id="add-bond" class="btn primary">+ Add bond / deposit</button><button id="add-bond-past" class="btn ghost">+ Record bond for past stay</button></div>`:''}</div>
+  <div class="tenant-tools"><div class="view-switch">${tabKeys.map(x=>`<button class="${filter===x?'active':''}" data-bfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const kind=bondStayFilterKind(b);const t=kind==='unlinked'?null:state.tenancies.find(x=>Number(x.id)===Number(b.tenancy_id));const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);const retainedNow=bondRetainedTotal(b);const stayLbl=kind==='unlinked'?`<span class="danger-text">Unlinked / Needs Review</span><div class="muted small">tenancy_id: ${esc(b.tenancy_id==null||b.tenancy_id===''?'(empty)':b.tenancy_id)}</div>`:`Stay #${esc(b.tenancy_id)} · ${esc(bondStayFilterLabel(kind))}`;return `<tr data-bond-kind="${esc(kind)}"><td>${esc(tenantBy(t?.tenant_id)?.name||(kind==='unlinked'?'—':''))}<div class="muted small">${stayLbl}</div></td><td>${esc(t?roomLabel(t.room_id):'—')}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${retainedNow>0?`<div class="muted small">Retained ${money(retainedNow,cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open held':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled title="No remaining balance — use Refund from retained if applicable"':''}>Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-refund-retained" data-bond="${b.id}" ${retainedNow<=0?'disabled':''}>Refund from retained</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn danger delete-bond" data-bond="${b.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No bond records for this stay filter.</div>`}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed). Retentions and refunds-from-retained show date, amount, reason and staff.</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes / Reason</th><th>Staff</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(bondActionLabel(e.action))}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td><td>${esc(staffLabel(e.created_by))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>
   ${canEdit()?`<section class="panel"><div class="panel-head"><h2>Recently deleted bonds (archive)</h2><div class="muted small">Soft-deleted bonds can be restored once. Existing permanently deleted history from before this feature is not recoverable.</div></div><div id="bond-archive-list" class="muted small">Loading archives…</div></section>`:''}`;
 }
@@ -5004,12 +5066,11 @@ function openEditPayment(id){
   bindPaymentMethodCurrency(f);
   f.elements.currency.value=paymentCurrency(p);
   f.elements.currency.dataset.touched='1';
-  // If period was missing (common cause of stuck "due soon"), offer the next cycle defaults without wiping amount.
-  if(!f.elements.period_end.value){
-    const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
-    applyPaymentPeriodDefaults(f,t,{force:true,fillAmount:false});
-  }
-  $('#payment-dialog-title').textContent='Edit rent payment';
+  // Leave Covered Period blank when missing so staff can add it deliberately (do not invent dates).
+  f.elements.payment_action_id.value='';
+  f.elements.idempotency_key.value='';
+  $('#payment-action-context').classList.add('hidden');
+  $('#payment-dialog-title').textContent='Edit Payment';
   $('#payment-error').classList.add('hidden');
   f.elements.tenancy_id.onchange=null;
   $('#payment-dialog').showModal();
@@ -5139,14 +5200,53 @@ function openBondEdit(id){
 }
 async function deletePayment(id){
   if(!canEdit())return;
-  const p=state.payments.find(x=>Number(x.id)===Number(id));if(!p||!confirm(`Delete payment ${money(p.amount,paymentCurrency(p))}? This cannot be undone.`))return;
+  const pid=Number(id);
+  if(!Number.isFinite(pid)||pid<=0)return;
+  if(deletingPaymentIds.has(pid))return; // prevent accidental double deletion
+  const p=state.payments.find(x=>Number(x.id)===pid);
+  if(!p){toast('Payment already removed');return}
+  const t=state.tenancies.find(x=>Number(x.id)===Number(p.tenancy_id));
+  const tenant=tenantBy(t?.tenant_id||p.tenant_id);
+  const room=roomBy(t?.room_id);
+  const cur=paymentCurrency(p);
+  const periodLabel=(p.period_start||p.period_end)?`${p.period_start||'—'} → ${p.period_end||'—'}`:'not set';
+  if(!confirm(`Delete payment ${money(p.amount,cur)} for ${tenant?.name||'tenant'} (${periodLabel})?\n\nThis cannot be undone. Bond records are not affected.`))return;
+  deletingPaymentIds.add(pid);
   try{
-    await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});
-    toast('Payment deleted');
-    await loadAll();
-    // Audit AFTER delete — best-effort; uses user_id (not actor_user_id).
-    logActivityBestEffort('delete_payment','payment',String(id),{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date});
-  }catch(e){alert(e.message)}
+    await api('rent_payments',`id=eq.${pid}`,{method:'DELETE'});
+    // Drop local row immediately so UI / double-click cannot delete again.
+    state.payments=(state.payments||[]).filter(x=>Number(x.id)!==pid);
+    const uid=getSession()?.user?.id||null;
+    // Audit AFTER successful delete — activity_log.user_id (never actor_user_id column).
+    const logResult=await logActivityBestEffort('delete_payment','payment',String(pid),{
+      amount:p.amount,
+      currency:cur,
+      tenancy_id:p.tenancy_id||null,
+      tenant_id:t?.tenant_id||null,
+      tenant_name:tenant?.name||null,
+      room_id:t?.room_id||null,
+      room_label:room?roomShortName(room):null,
+      property_id:room?.property_id||state.propertyId||null,
+      received_date:p.received_date||null,
+      period_start:p.period_start||null,
+      period_end:p.period_end||null,
+      payment_method:p.payment_method||null,
+      actor:uid
+    });
+    // Payment DELETE already succeeded — report that first; reconcile/log issues are secondary.
+    let msg='Payment deleted.';
+    const notes=[];
+    if(!logResult.ok)notes.push('Activity log could not be written (payment was deleted).');
+    const refresh=await refreshPaymentDerivedState();
+    if(!refresh.reconcileOk)notes.push('Rent balance recalculation needs a Refresh.');
+    if(!refresh.loadOk)notes.push('Screen reload incomplete — tap Refresh.');
+    toast(notes.length?`${msg}\nNote: ${notes.join(' ')}`:msg);
+  }catch(e){
+    // Only surface as payment failure when the DELETE itself failed.
+    alert(e.message);
+  }finally{
+    deletingPaymentIds.delete(pid);
+  }
 }
 function isArchiveDeleteRpcMissingError(ex){
   const m=String(ex?.message||ex||'');
@@ -6110,19 +6210,22 @@ $('#payment-form').onsubmit=async e=>{
   if(actionIdRaw&&String(actionIdRaw).startsWith('virtual')){
     try{action=await ensurePersistedAction(findActionById(actionIdRaw)||virtualPaymentAction(t))}catch(ex){err.textContent=ex.message;err.classList.remove('hidden');return}
   }
-  let period_start=fd.get('period_start')||null, period_end=fd.get('period_end')||null;
-  if((!period_start||!period_end)&&t){
-    const sug=suggestPaymentPeriod(t);
-    period_start=period_start||sug.start;
-    period_end=period_end||sug.end;
+  let period_start=String(fd.get('period_start')||'').trim()||null;
+  let period_end=String(fd.get('period_end')||'').trim()||null;
+  // Covered Period is optional — do not auto-invent dates on save (staff may add later via Edit).
+  if((period_start&&!period_end)||(!period_start&&period_end)){
+    err.textContent='Provide both Covered Period start and end, or leave both blank.';err.classList.remove('hidden');return;
   }
-  if(!period_end){err.textContent='Period end is required so Rent due status can update after payment.';err.classList.remove('hidden');return}
   if(period_start&&period_end&&period_end<period_start){err.textContent='Period end must be on or after period start.';err.classList.remove('hidden');return}
   const method=normalizePaymentMethod(fd.get('payment_method'));
   const currency=fd.get('currency')==='CNY'?'CNY':'AUD';
   const amount=Number(fd.get('amount'));
+  if(!Number.isFinite(amount)||amount<=0){err.textContent='Enter a valid amount greater than zero.';err.classList.remove('hidden');return}
   const received_date=fd.get('received_date')||today();
+  if(!received_date){err.textContent='Received date is required.';err.classList.remove('hidden');return}
   const editId=Number(fd.get('id')||0);
+  const previous=editId?(state.payments.find(x=>Number(x.id)===editId)||null):null;
+  if(editId&&!previous){err.textContent='Payment not found — it may already have been deleted.';err.classList.remove('hidden');return}
   // Always derive key from current fields for new payments (avoids stale key after amount edits).
   const idem=editId
     ?(String(fd.get('idempotency_key')||'').trim()||null)
@@ -6179,28 +6282,45 @@ $('#payment-form').onsubmit=async e=>{
   }
 
   // 2) Best-effort audit AFTER successful save — schema column is user_id (never actor_user_id).
+  const uid=getSession()?.user?.id||null;
+  const logDetails={
+    amount,
+    tenancy_id:tid,
+    tenant_id:t?.tenant_id||null,
+    tenant_name:tenantBy(t?.tenant_id)?.name||null,
+    room_id:t?.room_id||null,
+    room_label:t?.room_id?roomShortName(roomBy(t.room_id)):null,
+    property_id:roomBy(t?.room_id)?.property_id||state.propertyId||null,
+    received_date,
+    period_start,
+    period_end,
+    payment_method:method,
+    currency,
+    payment_action_id:action?.id||null,
+    idempotency_key:idem||null,
+    actor:uid
+  };
+  if(editId&&previous){
+    logDetails.previous={
+      amount:previous.amount,
+      received_date:previous.received_date||null,
+      period_start:previous.period_start||null,
+      period_end:previous.period_end||null,
+      payment_method:previous.payment_method||null,
+      tenancy_id:previous.tenancy_id||null,
+      notes:displayPaymentNotes(previous)||null
+    };
+  }
   const logResult=await logActivityBestEffort(
     editId?'edit_payment':'add_payment',
     'payment',
     String(payment?.id||editId||''),
-    {
-      amount,
-      tenancy_id:tid,
-      room_id:t?.room_id||null,
-      property_id:roomBy(t?.room_id)?.property_id||state.propertyId||null,
-      received_date,
-      period_start,
-      period_end,
-      payment_method:method,
-      currency,
-      payment_action_id:action?.id||null,
-      idempotency_key:idem||null
-    }
+    logDetails
   );
 
-  // 3) Reconcile Payment Action (best-effort relative to the already-saved payment).
+  // 3) Reconcile derived rent/action state (best-effort — payment row already persisted).
   let msg=editId?'Payment updated.':'Payment recorded successfully.';
-  let secondary='';
+  const notes=[];
   if(action){
     try{
       const updated=await reconcilePaymentAction(action,{payment});
@@ -6216,20 +6336,22 @@ $('#payment-form').onsubmit=async e=>{
         msg=`Partial payment recorded.\n${money(rem)} remaining.`;
       }
     }catch(ex){
-      secondary=String(ex?.message||ex||'Payment Action update failed');
+      notes.push(String(ex?.message||ex||'Payment Action update failed'));
     }
   }
-  if(!logResult.ok&&!secondary){
-    secondary='Activity log could not be written (payment was saved).';
-  }else if(!logResult.ok&&secondary){
-    secondary+='; Activity log could not be written.';
+  // Always refresh open actions / balances after save (does not create payments or touch bonds).
+  try{
+    await softReconcileOpenActions();
+  }catch(ex){
+    notes.push('Rent balance recalculation needs a Refresh.');
   }
+  if(!logResult.ok)notes.push('Activity log could not be written (payment was saved).');
 
   f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
   $('#payment-action-context').classList.add('hidden');
   $('#payment-dialog').close();
-  toast(secondary?`${msg}\nNote: ${secondary}`:msg);
-  try{await loadAll()}catch(_){}
+  toast(notes.length?`${msg}\nNote: ${notes.join(' ')}`:msg);
+  try{await loadAll()}catch(_){toast(`${msg}\nNote: Screen reload incomplete — tap Refresh. Payment was saved.`)}
 };
 $('#bond-form').onsubmit=async e=>{
   e.preventDefault();if(!canEdit())return;

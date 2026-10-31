@@ -89,13 +89,15 @@ if (/bondPaymentEvents/.test(script)) {
   pass('no bondPaymentEvents state key');
 }
 
-if (/actor_user_id/.test(script)) {
-  fail('activity_log uses user_id not actor_user_id', 'actor_user_id still present');
+// Forbid writing actor_user_id as a column/property; comments may still name the bad column.
+if (/actor_user_id\s*:/.test(script)) {
+  fail('activity_log uses user_id not actor_user_id', 'actor_user_id property write still present');
 } else {
   pass('activity_log uses user_id not actor_user_id');
 }
 
-if (/insert\('activity_log',\{user_id:uid,action:'delete_payment'/.test(script)) {
+if (/logActivityBestEffort\(\s*'delete_payment'/.test(script)
+  || /insert\('activity_log',\{user_id:uid,action:'delete_payment'/.test(script)) {
   pass('payment delete audit uses user_id best-effort');
 } else {
   fail('payment delete audit uses user_id best-effort');

@@ -150,10 +150,9 @@ function seedBase() {
   });
 }
 
-check('UI tabs CURRENT | UPCOMING | HISTORICAL (no all/past mix)', () => {
-  assert(/\['current','upcoming','historical'\]/.test(html), 'three operational tabs only');
+check('UI tabs ALL | CURRENT | UPCOMING | PAST', () => {
+  assert(/\['all','current','upcoming','past'\]/.test(html), 'four tenant stay filters');
   assert(/data-tfilter="\$\{x\}"/.test(html), 'tfilter buttons');
-  assert(!/\['current','upcoming','past','all'\]/.test(html), 'no past/all mix list');
   assert(/Current \(\$\{counts\.current\}\)/.test(html) || /tabLabel\(x\)/.test(html), 'counts in tabs');
   assert(/isOperationallyClosed/.test(html), 'shared closed SoT');
   assert(/upcomingDepartures/.test(html), 'shared departures helper');

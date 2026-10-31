@@ -6319,8 +6319,9 @@ $('#payment-form').onsubmit=async e=>{
   );
 
   // 3) Reconcile derived rent/action state (best-effort — payment row already persisted).
+  // NOTE: must not redeclare `notes` — payment notes string is already `let notes` above (SyntaxError otherwise → infinite Loading).
   let msg=editId?'Payment updated.':'Payment recorded successfully.';
-  const notes=[];
+  const followUpNotes=[];
   if(action){
     try{
       const updated=await reconcilePaymentAction(action,{payment});
@@ -6336,21 +6337,21 @@ $('#payment-form').onsubmit=async e=>{
         msg=`Partial payment recorded.\n${money(rem)} remaining.`;
       }
     }catch(ex){
-      notes.push(String(ex?.message||ex||'Payment Action update failed'));
+      followUpNotes.push(String(ex?.message||ex||'Payment Action update failed'));
     }
   }
   // Always refresh open actions / balances after save (does not create payments or touch bonds).
   try{
     await softReconcileOpenActions();
   }catch(ex){
-    notes.push('Rent balance recalculation needs a Refresh.');
+    followUpNotes.push('Rent balance recalculation needs a Refresh.');
   }
-  if(!logResult.ok)notes.push('Activity log could not be written (payment was saved).');
+  if(!logResult.ok)followUpNotes.push('Activity log could not be written (payment was saved).');
 
   f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
   $('#payment-action-context').classList.add('hidden');
   $('#payment-dialog').close();
-  toast(notes.length?`${msg}\nNote: ${notes.join(' ')}`:msg);
+  toast(followUpNotes.length?`${msg}\nNote: ${followUpNotes.join(' ')}`:msg);
   try{await loadAll()}catch(_){toast(`${msg}\nNote: Screen reload incomplete — tap Refresh. Payment was saved.`)}
 };
 $('#bond-form').onsubmit=async e=>{

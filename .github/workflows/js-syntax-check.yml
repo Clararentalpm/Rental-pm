@@ -1,0 +1,46 @@
+# Fail PRs / pushes that break the inline app script (prevents deploy of unparseable JS).
+name: JS syntax check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  node-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Extract inline script and node --check
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const { spawnSync } = require('child_process');
+          const html = fs.readFileSync('Rental Management/index.html', 'utf8');
+          const m = html.match(/<script>([\s\S]*?)<\/script>/);
+          if (!m) {
+            console.error('No inline <script> found in Rental Management/index.html');
+            process.exit(1);
+          }
+          const out = '/tmp/rental-pm-ci-check.js';
+          fs.writeFileSync(out, m[1]);
+          const r = spawnSync('node', ['--check', out], { encoding: 'utf8' });
+          if (r.status !== 0) {
+            console.error(r.stderr || r.stdout || 'node --check failed');
+            process.exit(r.status || 1);
+          }
+          console.log('node --check OK');
+          NODE
+
+      - name: Login boot regression
+        run: node "Rental Management/login-boot-regression-test.js"

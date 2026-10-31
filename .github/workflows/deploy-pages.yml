@@ -20,7 +20,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Block Pages deploy if the SPA script cannot parse (P0 class: infinite Loading).
+  js-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: node --check inline script
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const { spawnSync } = require('child_process');
+          const html = fs.readFileSync('Rental Management/index.html', 'utf8');
+          const m = html.match(/<script>([\s\S]*?)<\/script>/);
+          if (!m) { console.error('No inline <script>'); process.exit(1); }
+          fs.writeFileSync('/tmp/rental-pm-pages-check.js', m[1]);
+          const r = spawnSync('node', ['--check', '/tmp/rental-pm-pages-check.js'], { encoding: 'utf8' });
+          if (r.status !== 0) { console.error(r.stderr || r.stdout); process.exit(r.status || 1); }
+          console.log('node --check OK');
+          NODE
+      - name: Login boot regression
+        run: node "Rental Management/login-boot-regression-test.js"
+
   deploy:
+    needs: js-syntax
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

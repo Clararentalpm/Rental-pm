@@ -3175,9 +3175,32 @@ async function logActionHistory(actionId,field,oldVal,newVal,reason){
     });
   }catch(_){/* table may be missing until migration */}
 }
+/**
+ * Best-effort activity_log write. Production schema column is user_id — NOT actor_user_id
+ * (PostgREST PGRST204: "Could not find the 'actor_user_id' column of 'activity_log' in the schema cache").
+ * Never throws; never blocks payment/bond/stay mutations. Does not invent columns.
+ */
+async function logActivityBestEffort(action,entityType,entityId,details){
+  try{
+    const uid=getSession()?.user?.id||null;
+    const row={
+      user_id:uid,
+      action:action||null,
+      entity_type:entityType||null,
+      entity_id:entityId==null||entityId===''?null:String(entityId),
+      details:details&&typeof details==='object'?details:details==null?null:{value:details}
+    };
+    // Defensive: never send the non-existent column even if a caller passes it in details-as-row mistakes.
+    if('actor_user_id' in row)delete row.actor_user_id;
+    await insert('activity_log',row);
+    return {ok:true};
+  }catch(e){
+    return {ok:false,error:String(e?.message||e||'activity_log write failed')};
+  }
+}
 async function logBookingEvent(row){
   try{await insert('booking_financial_events',{...row,created_by:getSession()?.user?.id||null})}catch(_){}
-  try{await insert('activity_log',{user_id:getSession()?.user?.id||null,action:row.event_type,entity_type:'tenancy',entity_id:String(row.tenancy_id||''),details:row})}catch(_){}
+  await logActivityBestEffort(row.event_type,'tenancy',row.tenancy_id||'',row);
 }
 async function ensurePaymentActionsReachable(){
   if(!state.paymentActionsError)return true;
@@ -5121,9 +5144,8 @@ async function deletePayment(id){
     await api('rent_payments',`id=eq.${id}`,{method:'DELETE'});
     toast('Payment deleted');
     await loadAll();
-    // Audit is best-effort and uses the real database column user_id.
-    const uid=getSession()?.user?.id||null;
-    insert('activity_log',{user_id:uid,action:'delete_payment',entity_type:'payment',entity_id:String(id),details:{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date}}).catch(()=>{});
+    // Audit AFTER delete — best-effort; uses user_id (not actor_user_id).
+    logActivityBestEffort('delete_payment','payment',String(id),{amount:p.amount,tenancy_id:p.tenancy_id,received_date:p.received_date});
   }catch(e){alert(e.message)}
 }
 function isArchiveDeleteRpcMissingError(ex){
@@ -6100,19 +6122,27 @@ $('#payment-form').onsubmit=async e=>{
   const currency=fd.get('currency')==='CNY'?'CNY':'AUD';
   const amount=Number(fd.get('amount'));
   const received_date=fd.get('received_date')||today();
-  const idem=fd.get('idempotency_key')||paymentIdempotencyKey(action?.id,amount,received_date,period_start,period_end);
-  // Double-click / retry protection
-  const existing=findPaymentByIdempotencyKey(idem);
-  if(existing&&!Number(fd.get('id')||0)){
-    if(action)await reconcilePaymentAction(action,{payment:existing});
-    f.reset();f.elements.id.value='';$('#payment-dialog').close();
+  const editId=Number(fd.get('id')||0);
+  // Always derive key from current fields for new payments (avoids stale key after amount edits).
+  const idem=editId
+    ?(String(fd.get('idempotency_key')||'').trim()||null)
+    :paymentIdempotencyKey(action?.id,amount,received_date,period_start,period_end);
+  // Double-click / retry protection — do not insert a second rent_payments row.
+  const existing=!editId&&idem?findPaymentByIdempotencyKey(idem):null;
+  if(existing){
+    try{if(action)await reconcilePaymentAction(action,{payment:existing})}catch(_){}
+    f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
+    $('#payment-action-context').classList.add('hidden');
+    $('#payment-dialog').close();
     toast('Payment already recorded (duplicate prevented)');
-    await loadAll();
+    try{await loadAll()}catch(_){}
     return;
   }
   let notes=withPaymentCurrency(fd.get('notes')||'',currency);
-  if(action?.id)notes=`${notes}\nACTION_ID:${action.id}\nIDEMPOTENCY_KEY:${idem}`.trim();
-  else notes=`${notes}\nIDEMPOTENCY_KEY:${idem}`.trim();
+  if(idem){
+    if(action?.id)notes=`${notes}\nACTION_ID:${action.id}\nIDEMPOTENCY_KEY:${idem}`.trim();
+    else notes=`${notes}\nIDEMPOTENCY_KEY:${idem}`.trim();
+  }
   const row={
     tenancy_id:tid,
     amount,
@@ -6124,28 +6154,60 @@ $('#payment-form').onsubmit=async e=>{
     notes,
     recorded_by:getSession()?.user?.id||null
   };
-  const editId=Number(fd.get('id')||0);
+  let payment=null;
+  // 1) Persist payment first. Activity-log / reconcile failures must not undo or re-create it.
   try{
-    let payment=null;
     if(editId){
       const {recorded_by,...patchRow}=row;
-      await patch('rent_payments',`id=eq.${editId}`,patchRow);
-      payment={...row,id:editId};
-      toast('Payment updated');
+      const updated=await patch('rent_payments',`id=eq.${editId}`,patchRow);
+      payment=updated?.[0]||{...row,id:editId};
+      const idx=(state.payments||[]).findIndex(p=>Number(p.id)===Number(editId));
+      if(idx>=0)state.payments[idx]={...state.payments[idx],...payment};
+      else state.payments.push(payment);
     }else{
       const created=await insert('rent_payments',row);
       payment=created?.[0]||{...row};
-      // Push into local state immediately so reconcile sees it before reload
-      if(payment&&!state.payments.some(p=>Number(p.id)===Number(payment.id)))state.payments.push(payment);
+      const already=(state.payments||[]).some(p=>{
+        if(payment.id!=null&&Number(p.id)===Number(payment.id))return true;
+        return idem&&String(p.notes||'').includes(`IDEMPOTENCY_KEY:${idem}`);
+      });
+      if(!already)state.payments.push(payment);
     }
-    let msg='Payment recorded successfully.';
-    if(action){
+  }catch(ex){
+    err.textContent=ex.message;err.classList.remove('hidden');
+    return;
+  }
+
+  // 2) Best-effort audit AFTER successful save — schema column is user_id (never actor_user_id).
+  const logResult=await logActivityBestEffort(
+    editId?'edit_payment':'add_payment',
+    'payment',
+    String(payment?.id||editId||''),
+    {
+      amount,
+      tenancy_id:tid,
+      room_id:t?.room_id||null,
+      property_id:roomBy(t?.room_id)?.property_id||state.propertyId||null,
+      received_date,
+      period_start,
+      period_end,
+      payment_method:method,
+      currency,
+      payment_action_id:action?.id||null,
+      idempotency_key:idem||null
+    }
+  );
+
+  // 3) Reconcile Payment Action (best-effort relative to the already-saved payment).
+  let msg=editId?'Payment updated.':'Payment recorded successfully.';
+  let secondary='';
+  if(action){
+    try{
       const updated=await reconcilePaymentAction(action,{payment});
       const rem=Number(updated?.amount||0);
       if(updated?.status==='resolved'){
         if(t&&isOneOffStay(t))msg='Payment recorded successfully. Payment Action resolved. One-off stay fully paid. No further rent due.';
         else{
-          // Recurring: next obligation is derived from paid-through + cycle after reload.
           const next=nextRentDue(t);
           msg=`Payment recorded successfully.\nPayment Action resolved.${next?`\nNext due: ${next}.`:''}`;
         }
@@ -6153,11 +6215,21 @@ $('#payment-form').onsubmit=async e=>{
       }else{
         msg=`Partial payment recorded.\n${money(rem)} remaining.`;
       }
+    }catch(ex){
+      secondary=String(ex?.message||ex||'Payment Action update failed');
     }
-    f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
-    $('#payment-action-context').classList.add('hidden');
-    $('#payment-dialog').close();toast(msg);await loadAll();
-  }catch(ex){err.textContent=ex.message;err.classList.remove('hidden')}
+  }
+  if(!logResult.ok&&!secondary){
+    secondary='Activity log could not be written (payment was saved).';
+  }else if(!logResult.ok&&secondary){
+    secondary+='; Activity log could not be written.';
+  }
+
+  f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
+  $('#payment-action-context').classList.add('hidden');
+  $('#payment-dialog').close();
+  toast(secondary?`${msg}\nNote: ${secondary}`:msg);
+  try{await loadAll()}catch(_){}
 };
 $('#bond-form').onsubmit=async e=>{
   e.preventDefault();if(!canEdit())return;

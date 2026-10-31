@@ -4277,19 +4277,39 @@ function incomePage(){
     </section>
   </div>`;
 }
-/** Bond list filter kind from linked stay (same SoT as Tenants). Orphan bonds → past. */
+/**
+ * Bond list filter kind from linked stay (same SoT as Tenants).
+ * Missing / invalid tenancy_id → 'unlinked' (Needs Review) — never silently treated as Past.
+ */
 function bondStayFilterKind(b){
-  const t=state.tenancies.find(x=>Number(x.id)===Number(b?.tenancy_id));
-  if(!t)return 'past';
+  const tid=b?.tenancy_id;
+  if(tid==null||tid===''||!Number.isFinite(Number(tid)))return 'unlinked';
+  const t=state.tenancies.find(x=>Number(x.id)===Number(tid));
+  if(!t)return 'unlinked';
   const k=bookingOperationalKind(t);
   return k==='historical'?'past':k;
 }
+function bondStayFilterLabel(kind){
+  if(kind==='unlinked')return 'Unlinked / Needs Review';
+  if(kind==='past')return 'Past';
+  if(kind==='upcoming')return 'Upcoming';
+  if(kind==='current')return 'Current';
+  return String(kind||'—');
+}
+/** After a successful rent_payments write/delete: refresh derived balances without touching unrelated rows. */
+async function refreshPaymentDerivedState(){
+  let reconcileOk=true,reconcileError='',loadOk=true,loadError='';
+  try{await softReconcileOpenActions()}catch(e){reconcileOk=false;reconcileError=String(e?.message||e||'recalculate failed')}
+  try{await loadAll()}catch(e){loadOk=false;loadError=String(e?.message||e||'reload failed')}
+  return {reconcileOk,reconcileError,loadOk,loadError};
+}
 function bondsPage(){
   let filter=state.bondFilter||'current';
-  // Legacy open/closed → map into stay filters (keep closed bonds visible under Past / All).
+  // Legacy open/closed → stay filters (closed bonds remain under Past / All; unlinked stay separate).
   if(filter==='open')filter='current';
   if(filter==='closed')filter='past';
-  if(!['all','current','upcoming','past'].includes(filter))filter='current';
+  if(filter==='orphan'||filter==='needs_review')filter='unlinked';
+  if(!['all','current','upcoming','past','unlinked'].includes(filter))filter='current';
   state.bondFilter=filter;
   const all=scopedBonds().sort((a,b)=>b.id-a.id);
   const withKind=all.map(b=>({b,kind:bondStayFilterKind(b)}));
@@ -4297,7 +4317,8 @@ function bondsPage(){
     all:withKind.length,
     current:withKind.filter(x=>x.kind==='current').length,
     upcoming:withKind.filter(x=>x.kind==='upcoming').length,
-    past:withKind.filter(x=>x.kind==='past').length
+    past:withKind.filter(x=>x.kind==='past').length,
+    unlinked:withKind.filter(x=>x.kind==='unlinked').length
   };
   const rows=withKind
     .filter(x=>filter==='all'||x.kind===filter)
@@ -4305,13 +4326,17 @@ function bondsPage(){
   const historyRows=all;
   const totals=openBondTotalsByCurrency();
   const totalLbl=[totals.AUD>0?`AUD ${money(totals.AUD,'AUD')}`:null,totals.CNY>0?`CNY ${money(totals.CNY,'CNY')}`:null].filter(Boolean).join(' · ')||'none held';
+  const tabKeys=['all','current','upcoming','past','unlinked'];
   const tabLabel=k=>{
-    const title=k==='all'?'All':k==='current'?'Current':k==='upcoming'?'Upcoming':'Past';
+    const title=k==='all'?'All':k==='current'?'Current':k==='upcoming'?'Upcoming':k==='past'?'Past':'Unlinked / Needs Review';
     return `${title} (${counts[k]})`;
   };
-  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Filtered by <b>linked stay</b> status (same as Tenants). Past includes ended stays — closed/refunded/retained bonds stay visible for review and authorised corrections. Open held: ${esc(totalLbl)}. Currencies never mixed.</div></div>${canEdit()?`<div class="tenant-actions"><button id="add-bond" class="btn primary">+ Add bond / deposit</button><button id="add-bond-past" class="btn ghost">+ Record bond for past stay</button></div>`:''}</div>
-  <div class="tenant-tools"><div class="view-switch">${['all','current','upcoming','past'].map(x=>`<button class="${filter===x?'active':''}" data-bfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
-  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const t=state.tenancies.find(x=>x.id===b.tenancy_id);const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);const retainedNow=bondRetainedTotal(b);return `<tr><td>${esc(tenantBy(t?.tenant_id)?.name||'')}<div class="muted small">Stay #${esc(b.tenancy_id||'—')} · ${esc(bondStayFilterKind(b))}</div></td><td>${esc(roomLabel(t?.room_id))}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${retainedNow>0?`<div class="muted small">Retained ${money(retainedNow,cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open held':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled title="No remaining balance — use Refund from retained if applicable"':''}>Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-refund-retained" data-bond="${b.id}" ${retainedNow<=0?'disabled':''}>Refund from retained</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn danger delete-bond" data-bond="${b.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No bond records for this stay filter.</div>`}</section>
+  const unlinkedNote=counts.unlinked
+    ?`<div class="note" style="margin:10px 0 0"> <b>${counts.unlinked}</b> bond(s) have no matching stay — use <b>Unlinked / Needs Review</b>. Records are preserved; nothing is auto-relinked or deleted.</div>`
+    :'';
+  return `<section class="panel"><div class="panel-head"><div><h2>Bond & refund register</h2><div class="muted small">Filtered by <b>linked stay</b> status (same as Tenants). <b>Unlinked / Needs Review</b> = missing or invalid tenancy (not Past). Past includes ended stays — closed/refunded/retained bonds stay visible. Open held: ${esc(totalLbl)}. Currencies never mixed.</div>${unlinkedNote}</div>${canEdit()?`<div class="tenant-actions"><button id="add-bond" class="btn primary">+ Add bond / deposit</button><button id="add-bond-past" class="btn ghost">+ Record bond for past stay</button></div>`:''}</div>
+  <div class="tenant-tools"><div class="view-switch">${tabKeys.map(x=>`<button class="${filter===x?'active':''}" data-bfilter="${x}">${tabLabel(x)}</button>`).join('')}</div></div>
+  ${rows.length?`<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Type</th><th>Original</th><th>Remaining</th><th>Received</th><th>Status</th><th>Notes</th><th>Action</th></tr></thead><tbody>${rows.map(b=>{const kind=bondStayFilterKind(b);const t=kind==='unlinked'?null:state.tenancies.find(x=>Number(x.id)===Number(b.tenancy_id));const cur=b.original_currency==='CNY'?'CNY':'AUD';const remNow=bondRemaining(b);const retainedNow=bondRetainedTotal(b);const stayLbl=kind==='unlinked'?`<span class="danger-text">Unlinked / Needs Review</span><div class="muted small">tenancy_id: ${esc(b.tenancy_id==null||b.tenancy_id===''?'(empty)':b.tenancy_id)}</div>`:`Stay #${esc(b.tenancy_id)} · ${esc(bondStayFilterLabel(kind))}`;return `<tr data-bond-kind="${esc(kind)}"><td>${esc(tenantBy(t?.tenant_id)?.name||(kind==='unlinked'?'—':''))}<div class="muted small">${stayLbl}</div></td><td>${esc(t?roomLabel(t.room_id):'—')}</td><td>${esc((b.bond_type||'bond').replaceAll('_',' '))}</td><td><b>${money(b.amount,cur)}</b></td><td><b>${money(remNow,cur)}</b>${retainedNow>0?`<div class="muted small">Retained ${money(retainedNow,cur)}</div>`:''}${bondRefundedTotal(b)>0?`<div class="muted small">Refunded ${money(bondRefundedTotal(b),cur)}</div>`:''}</td><td>${b.received?'Yes':'No'}${b.received_date?`<div class="muted small">${fmtDate(b.received_date)}</div>`:''}</td><td><b>${esc(bondDepositStatus(b))}</b>${b.refunded?'<div class="muted small">Refunded flag</div>':''}<div class="muted small">${bondBucket(b)==='open'?'Open held':'Refunded / Closed'}</div></td><td>${esc(b.remaining_description||displayCleanNotes(b.notes)||'—')}</td><td>${canEdit()?`<div class="tenant-actions"><button class="btn ghost edit-bond" data-bond="${b.id}">Edit</button><button class="btn ghost bond-action" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled title="No remaining balance — use Refund from retained if applicable"':''}>Refund / deduct</button><button class="btn ghost bond-retain" data-bond="${b.id}" ${(remNow==null||remNow<=0)?'disabled':''}>Retain Bond</button><button class="btn ghost bond-refund-retained" data-bond="${b.id}" ${retainedNow<=0?'disabled':''}>Refund from retained</button><button class="btn ghost bond-mark-refunded" data-bond="${b.id}" ${b.refunded?'disabled':''}>Mark refunded</button><button class="btn ghost bond-mark-not-refunded" data-bond="${b.id}" ${!b.refunded?'disabled':''}>Mark not refunded</button><button class="btn danger delete-bond" data-bond="${b.id}">Delete</button></div>`:'—'}</td></tr>`}).join('')}</tbody></table></div>`:`<div class="empty">No bond records for this stay filter.</div>`}</section>
   <section class="panel"><div class="panel-head"><h2>Bond action history</h2><div class="muted small">All bond actions for this property (open and closed). Retentions and refunds-from-retained show date, amount, reason and staff.</div></div>${state.bondRefundEvents.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Bond ID</th><th>Action</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes / Reason</th><th>Staff</th></tr></thead><tbody>${state.bondRefundEvents.filter(e=>historyRows.some(b=>b.id===e.bond_id)).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-AU')}</td><td>${e.bond_id}</td><td>${esc(bondActionLabel(e.action))}</td><td>${money(e.amount,e.currency==='CNY'?'CNY':'AUD')}</td><td>${esc(e.method||'—')}</td><td>${esc(e.reference||'—')}</td><td>${esc(e.notes||'')}</td><td>${esc(staffLabel(e.created_by))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bond actions recorded yet.</div>'}</section>
   ${canEdit()?`<section class="panel"><div class="panel-head"><h2>Recently deleted bonds (archive)</h2><div class="muted small">Soft-deleted bonds can be restored once. Existing permanently deleted history from before this feature is not recoverable.</div></div><div id="bond-archive-list" class="muted small">Loading archives…</div></section>`:''}`;
 }
@@ -5193,7 +5218,7 @@ async function deletePayment(id){
     state.payments=(state.payments||[]).filter(x=>Number(x.id)!==pid);
     const uid=getSession()?.user?.id||null;
     // Audit AFTER successful delete — activity_log.user_id (never actor_user_id column).
-    await logActivityBestEffort('delete_payment','payment',String(pid),{
+    const logResult=await logActivityBestEffort('delete_payment','payment',String(pid),{
       amount:p.amount,
       currency:cur,
       tenancy_id:p.tenancy_id||null,
@@ -5208,10 +5233,16 @@ async function deletePayment(id){
       payment_method:p.payment_method||null,
       actor:uid
     });
-    toast('Payment deleted');
-    try{await softReconcileOpenActions()}catch(_){}
-    try{await loadAll()}catch(_){}
+    // Payment DELETE already succeeded — report that first; reconcile/log issues are secondary.
+    let msg='Payment deleted.';
+    const notes=[];
+    if(!logResult.ok)notes.push('Activity log could not be written (payment was deleted).');
+    const refresh=await refreshPaymentDerivedState();
+    if(!refresh.reconcileOk)notes.push('Rent balance recalculation needs a Refresh.');
+    if(!refresh.loadOk)notes.push('Screen reload incomplete — tap Refresh.');
+    toast(notes.length?`${msg}\nNote: ${notes.join(' ')}`:msg);
   }catch(e){
+    // Only surface as payment failure when the DELETE itself failed.
     alert(e.message);
   }finally{
     deletingPaymentIds.delete(pid);
@@ -6287,9 +6318,9 @@ $('#payment-form').onsubmit=async e=>{
     logDetails
   );
 
-  // 3) Reconcile Payment Action (best-effort relative to the already-saved payment).
+  // 3) Reconcile derived rent/action state (best-effort — payment row already persisted).
   let msg=editId?'Payment updated.':'Payment recorded successfully.';
-  let secondary='';
+  const notes=[];
   if(action){
     try{
       const updated=await reconcilePaymentAction(action,{payment});
@@ -6305,23 +6336,22 @@ $('#payment-form').onsubmit=async e=>{
         msg=`Partial payment recorded.\n${money(rem)} remaining.`;
       }
     }catch(ex){
-      secondary=String(ex?.message||ex||'Payment Action update failed');
+      notes.push(String(ex?.message||ex||'Payment Action update failed'));
     }
-  }else if(editId){
-    // Editing a payment without an action context — still refresh open actions / balances.
-    try{await softReconcileOpenActions()}catch(_){}
   }
-  if(!logResult.ok&&!secondary){
-    secondary='Activity log could not be written (payment was saved).';
-  }else if(!logResult.ok&&secondary){
-    secondary+='; Activity log could not be written.';
+  // Always refresh open actions / balances after save (does not create payments or touch bonds).
+  try{
+    await softReconcileOpenActions();
+  }catch(ex){
+    notes.push('Rent balance recalculation needs a Refresh.');
   }
+  if(!logResult.ok)notes.push('Activity log could not be written (payment was saved).');
 
   f.reset();f.elements.id.value='';f.elements.payment_action_id.value='';f.elements.idempotency_key.value='';
   $('#payment-action-context').classList.add('hidden');
   $('#payment-dialog').close();
-  toast(secondary?`${msg}\nNote: ${secondary}`:msg);
-  try{await loadAll()}catch(_){}
+  toast(notes.length?`${msg}\nNote: ${notes.join(' ')}`:msg);
+  try{await loadAll()}catch(_){toast(`${msg}\nNote: Screen reload incomplete — tap Refresh. Payment was saved.`)}
 };
 $('#bond-form').onsubmit=async e=>{
   e.preventDefault();if(!canEdit())return;

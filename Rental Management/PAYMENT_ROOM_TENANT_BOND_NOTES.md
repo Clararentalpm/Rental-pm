@@ -9,13 +9,14 @@
 3. **Room Status former occupants** — Shared occupancy helpers already exclude past/cancelled; UI now shows explicit **Vacant**, check-in/checkout, next upcoming, and availability so past tenants cannot be mistaken for current.
 
 4. **Tenant / Bond filters** — Tenants remapped `all`→current and used Historical naming; Bonds filtered by open/closed money state instead of stay status.
+5. **Unlinked bonds** — Missing/invalid `tenancy_id` must not be labelled Past; they use **Unlinked / Needs Review**.
 
 ## Implementation (app only)
 
-- Payments: optional covered period; Edit/Delete Payment actions; edit keeps same `rent_payments.id`; delete confirms, guards double-submit, audits via `user_id`, recalculates via soft reconcile + `loadAll`.
+- Payments: optional covered period; Edit/Delete Payment actions; edit keeps same `rent_payments.id`; delete confirms, guards double-submit, audits via `user_id`; `refreshPaymentDerivedState` recalculates after success; log/reconcile failures are secondary notes only.
 - Room Status: Vacant + structured occupancy fields; Brisbane timezone SoT unchanged; Carindale R3 ensuite / R4 not ensuite preserved.
 - Tenants: **All | Current | Upcoming | Past** (default Current).
-- Bonds: **All | Current | Upcoming | Past** by linked stay (`bookingOperationalKind`); closed past bonds remain listed.
+- Bonds: **All | Current | Upcoming | Past | Unlinked / Needs Review** by linked stay; closed past bonds remain listed; unlinked never auto-relinked/deleted.
 
 ## Database
 

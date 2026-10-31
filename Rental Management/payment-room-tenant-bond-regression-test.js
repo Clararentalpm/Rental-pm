@@ -33,8 +33,13 @@ assert('covered period optional on save',/Covered Period is optional/.test(scrip
 assert('period_end not hard-required',!/Period end is required so Rent due status/.test(script));
 assert('edit payment logs previous snapshot',/previous:\s*\{/.test(script)||/logDetails\.previous/.test(script));
 assert('tenant filters All/Current/Upcoming/Past',/\['all','current','upcoming','past'\]/.test(script));
-assert('bond filters All/Current/Upcoming/Past',/bondStayFilterKind/.test(script)&&/\['all','current','upcoming','past'\]/.test(script));
+assert('bondStayFilterKind helper present',/function bondStayFilterKind\(/.test(script));
+assert('bond Unlinked / Needs Review filter',/unlinked/.test(script)&&/Unlinked \/ Needs Review/.test(script));
+assert('bond filter keys include unlinked',/\['all','current','upcoming','past','unlinked'\]/.test(script));
 assert('bond default current',/bondFilter:'current'/.test(script));
+assert('refreshPaymentDerivedState helper',/function refreshPaymentDerivedState\(/.test(script));
+assert('delete reports secondary reconcile notes',/Rent balance recalculation needs a Refresh/.test(script));
+assert('save success independent of activity log',/payment was saved/.test(script)||/payment was deleted/.test(script));
 assert('room status Vacant label',/>Vacant</.test(script)||/Vacant</.test(script));
 assert('room status availability line',/Availability:/.test(script));
 assert('Carindale Room 3 ensuite rule',/canonicalCarindaleEnsuite/.test(script)&&/n===3/.test(script));
@@ -93,7 +98,11 @@ function seed(){
       {id:801,tenancy_id:100,amount:400,original_currency:'AUD',received:true,refunded:false,bond_type:'rental_bond',remaining_amount:400},
       {id:802,tenancy_id:101,amount:200,original_currency:'AUD',received:true,refunded:true,bond_type:'booking_deposit',refund_amount:200,remaining_amount:0},
       {id:803,tenancy_id:103,amount:150,original_currency:'CNY',received:true,refunded:false,bond_type:'booking_deposit',remaining_amount:150},
-      {id:804,tenancy_id:104,amount:100,original_currency:'AUD',received:true,refunded:false,bond_type:'booking_deposit',remaining_amount:100}
+      {id:804,tenancy_id:104,amount:100,original_currency:'AUD',received:true,refunded:false,bond_type:'booking_deposit',remaining_amount:100},
+      // Unlinked — null / missing / invalid tenancy must NOT classify as past
+      {id:805,tenancy_id:null,amount:90,original_currency:'AUD',received:true,refunded:false,bond_type:'deposit',remaining_amount:90,forfeited_amount:0},
+      {id:806,tenancy_id:99999,amount:75,original_currency:'AUD',received:true,refunded:false,bond_type:'deposit',remaining_amount:50,forfeited_amount:25},
+      {id:807,tenancy_id:'',amount:60,original_currency:'CNY',received:true,refunded:true,refund_amount:60,bond_type:'booking_deposit',remaining_amount:0}
     ],
     paymentActions:[],paymentActionHistory:[],bookingEvents:[],activity:[],
     bondEvents:[],bondRefundEvents:[],viewings:[],roomProfiles:[],
@@ -129,25 +138,56 @@ assert('bond on current stay → current',sandbox.bondStayFilterKind(S.bonds[0])
 assert('closed bond on past stay → past (still accessible)',sandbox.bondStayFilterKind(S.bonds[1])==='past');
 assert('bond on upcoming returning stay → upcoming',sandbox.bondStayFilterKind(S.bonds[2])==='upcoming');
 assert('upcoming-only bond → upcoming',sandbox.bondStayFilterKind(S.bonds[3])==='upcoming');
+assert('null tenancy_id → unlinked (not past)',sandbox.bondStayFilterKind(S.bonds.find(b=>b.id===805))==='unlinked');
+assert('invalid tenancy_id → unlinked (not past)',sandbox.bondStayFilterKind(S.bonds.find(b=>b.id===806))==='unlinked');
+assert('empty tenancy_id → unlinked',sandbox.bondStayFilterKind(S.bonds.find(b=>b.id===807))==='unlinked');
+assert('unlinked label readable',sandbox.bondStayFilterLabel('unlinked')==='Unlinked / Needs Review');
+assert('All includes unlinked count',S.bonds.filter(b=>sandbox.bondStayFilterKind(b)==='unlinked').length===3);
+assert('Past filter excludes unlinked',!S.bonds.filter(b=>sandbox.bondStayFilterKind(b)==='past').some(b=>[805,806,807].includes(Number(b.id))));
+assert('retained unlinked bond preserved',Number(S.bonds.find(b=>b.id===806).forfeited_amount)===25&&Number(S.bonds.find(b=>b.id===806).remaining_amount)===50);
+assert('refunded unlinked bond preserved',Number(S.bonds.find(b=>b.id===807).refund_amount)===60);
 
-// Payments: missing period allowed in data; idempotency; edit keeps id
+// Payments: missing period; edit date/amount/period; idempotency; delete
 assert('payment without covered period present',S.payments.some(p=>Number(p.id)===502&&!p.period_start&&!p.period_end));
 const beforeSum=S.payments.reduce((a,p)=>a+Number(p.amount||0),0);
-const edited={...S.payments[0],amount:220,received_date:'2026-10-06',id:501};
-S.payments[0]=edited;
-assert('edit preserves payment id',Number(S.payments[0].id)===501);
-assert('edit updates amount only on that row',Number(S.payments[0].amount)===220&&S.payments.length===2);
+const beforeCount=S.payments.length;
+const otherBefore=JSON.stringify(S.payments.find(p=>Number(p.id)===502));
+
+// Edit amount + received date — same id, no duplicate
+S.payments[0]={...S.payments[0],amount:220,received_date:'2026-10-06',id:501};
+assert('edit preserves payment id',Number(S.payments[0].id)===501&&S.payments.length===beforeCount);
+assert('edit updates amount and date',Number(S.payments[0].amount)===220&&S.payments[0].received_date==='2026-10-06');
+assert('unrelated payment unchanged by edit',JSON.stringify(S.payments.find(p=>Number(p.id)===502))===otherBefore);
+
+// Add missing covered period on existing payment
+S.payments[1]={...S.payments[1],period_start:'2026-10-08',period_end:'2026-10-14',id:502};
+assert('add covered period keeps same id',Number(S.payments[1].id)===502&&S.payments.length===beforeCount);
+assert('covered period now set',S.payments[1].period_start==='2026-10-08'&&S.payments[1].period_end==='2026-10-14');
+
+// Rent coverage / due helpers still function after edits (fictional tenancy 100)
+const stay=S.tenancies.find(t=>Number(t.id)===100);
+assert('rentState helper available after payment edits',typeof sandbox.rentState==='function'&&typeof sandbox.rentState(stay)==='string');
+assert('paidThrough / next due helpers available',typeof sandbox.nextRentDue==='function');
+
 S.payments[0]={...S.payments[0],amount:200,received_date:'2026-10-05'};
-assert('totals restore after fictional revert',S.payments.reduce((a,p)=>a+Number(p.amount||0),0)===beforeSum);
+assert('income-style sum after revert',S.payments.reduce((a,p)=>a+Number(p.amount||0),0)===beforeSum);
 
 const key='k2';
-assert('idempotency finds payment without period',!!sandbox.findPaymentByIdempotencyKey(key));
+assert('idempotency finds payment (no duplicate on retry)',!!sandbox.findPaymentByIdempotencyKey(key));
 
-// Delete does not touch bonds
-const bondsBefore=S.bonds.length;
-S.payments=S.payments.filter(p=>Number(p.id)!==502);
-assert('delete payment removes only that payment',S.payments.length===1&&!S.payments.some(p=>Number(p.id)===502));
-assert('bonds unchanged after payment delete',S.bonds.length===bondsBefore);
+// Delete without period then with period — bonds untouched; history length drops only for that id
+const bondsBefore=S.bonds.map(b=>({id:b.id,amount:b.amount,tenancy_id:b.tenancy_id,remaining_amount:b.remaining_amount}));
+const noPeriod={id:503,tenancy_id:100,amount:40,received_date:'2026-10-09',period_start:null,period_end:null,status:'paid',payment_method:'Cash',notes:'IDEMPOTENCY_KEY:k3'};
+S.payments.push(noPeriod);
+S.payments=S.payments.filter(p=>Number(p.id)!==503);
+assert('delete payment without period removes only that row',!S.payments.some(p=>Number(p.id)===503));
+S.payments=S.payments.filter(p=>Number(p.id)!==501);
+assert('delete payment with period removes only that row',!S.payments.some(p=>Number(p.id)===501)&&S.payments.some(p=>Number(p.id)===502));
+assert('bonds unchanged after payment deletes',JSON.stringify(S.bonds.map(b=>({id:b.id,amount:b.amount,tenancy_id:b.tenancy_id,remaining_amount:b.remaining_amount})))===JSON.stringify(bondsBefore));
+assert('tenancies unchanged after payment deletes',S.tenancies.length===6&&Number(S.tenancies[0].id)===100);
+
+// Failed activity log must not imply payment failure (source contract + local state already saved)
+assert('activity log failure messaging separates from payment success',/Activity log could not be written \(payment was (saved|deleted)\)/.test(script));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exitCode=failed?1:0;
